@@ -1,0 +1,20 @@
+[package]
+name = "uefi_app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+log = "0.4.34"
+uefi = { version = "0.39.0", features = ["panic_handler", "alloc", "logger"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[build]
+target = "x86_64-unknown-uefi"

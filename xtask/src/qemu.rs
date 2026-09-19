@@ -363,7 +363,7 @@ pub fn run_qemu(arch: UefiArch, opt: &QemuOpt) -> Result<()> {
     // binary this change won't affect anything.)
     let fn_append_win_path = |cmd: &mut Command| {
         let mut path = env::var_os("PATH").unwrap_or_default();
-        path.push(r";C:\Program Files\qemu");
+        path.push(r";E:\qemu");
         cmd.env("PATH", path);
     };
 

@@ -26,8 +26,8 @@ pub struct ListEntry {
 pub struct ShellFileInfo {
     pub link: ListEntry,
     pub status: Status,
-    pub full_name: *mut Char16,
-    pub file_name: *mut Char16,
+    pub full_name: *const Char16,
+    pub file_name: *const Char16,
     pub handle: ShellFileHandle,
     pub info: *mut FileInfo,
 }
@@ -61,7 +61,7 @@ pub struct ShellProtocol {
         volatile: Boolean,
     ) -> Status,
     pub get_alias:
-        unsafe extern "efiapi" fn(alias: *const Char16, volatile: Boolean) -> *const Char16,
+        unsafe extern "efiapi" fn(alias: *const Char16, volatile: *mut Boolean) -> *const Char16,
     pub set_alias: unsafe extern "efiapi" fn(
         command: *const Char16,
         alias: *const Char16,
@@ -78,9 +78,9 @@ pub struct ShellProtocol {
     pub get_map_from_device_path:
         unsafe extern "efiapi" fn(device_path: *mut *mut DevicePathProtocol) -> *const Char16,
     pub get_device_path_from_file_path:
-        unsafe extern "efiapi" fn(path: *const Char16) -> *const DevicePathProtocol,
+        unsafe extern "efiapi" fn(path: *const Char16) -> *mut DevicePathProtocol,
     pub get_file_path_from_device_path:
-        unsafe extern "efiapi" fn(path: *const DevicePathProtocol) -> *const Char16,
+        unsafe extern "efiapi" fn(path: *const DevicePathProtocol) -> *mut Char16,
     pub set_map: unsafe extern "efiapi" fn(
         device_path: *const DevicePathProtocol,
         mapping: *const Char16,
@@ -94,9 +94,9 @@ pub struct ShellProtocol {
         open_mode: u64,
         file_list: *mut *mut ShellFileInfo,
     ) -> Status,
-    pub free_file_list: unsafe extern "efiapi" fn(file_list: *const *const ShellFileInfo) -> Status,
+    pub free_file_list: unsafe extern "efiapi" fn(file_list: *mut *mut ShellFileInfo) -> Status,
     pub remove_dup_in_file_list:
-        unsafe extern "efiapi" fn(file_list: *const *const ShellFileInfo) -> Status,
+        unsafe extern "efiapi" fn(file_list: *mut *mut ShellFileInfo) -> Status,
 
     pub batch_is_active: unsafe extern "efiapi" fn() -> Boolean,
     pub is_root_shell: unsafe extern "efiapi" fn() -> Boolean,
@@ -110,7 +110,7 @@ pub struct ShellProtocol {
         best_device_name: *mut *mut Char16,
     ) -> Status,
 
-    pub get_file_info: unsafe extern "efiapi" fn(file_handle: ShellFileHandle) -> *const FileInfo,
+    pub get_file_info: unsafe extern "efiapi" fn(file_handle: ShellFileHandle) -> *mut FileInfo,
     pub set_file_info: unsafe extern "efiapi" fn(
         file_handle: ShellFileHandle,
         file_info: *const FileInfo,
@@ -134,7 +134,7 @@ pub struct ShellProtocol {
     pub write_file: unsafe extern "efiapi" fn(
         file_handle: ShellFileHandle,
         buffer_size: *mut usize,
-        buffer: *mut c_void,
+        buffer: *const c_void,
     ) -> Status,
     pub delete_file: unsafe extern "efiapi" fn(file_handle: ShellFileHandle) -> Status,
     pub delete_file_by_name: unsafe extern "efiapi" fn(file_name: *const Char16) -> Status,
@@ -170,7 +170,7 @@ pub struct ShellProtocol {
     pub register_guid_name:
         unsafe extern "efiapi" fn(guid: *const Guid, guid_name: *const Char16) -> Status,
     pub get_guid_name:
-        unsafe extern "efiapi" fn(guid: *const Guid, guid_name: *mut *mut Char16) -> Status,
+        unsafe extern "efiapi" fn(guid: *const Guid, guid_name: *mut *const Char16) -> Status,
     pub get_guid_from_name:
         unsafe extern "efiapi" fn(guid_name: *const Char16, guid: *mut Guid) -> Status,
     pub get_env_ex:

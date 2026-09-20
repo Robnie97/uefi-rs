@@ -10,10 +10,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_void};
-use core::ptr;
+use core::ptr::{self, NonNull};
 use log::debug;
 
-use uefi::boot::ScopedProtocol;
+use uefi::boot::{self, ScopedProtocol};
 use uefi::prelude::*;
 use uefi::proto::unsafe_protocol;
 use uefi_raw::protocol::driver::ServiceBindingProtocol;
@@ -27,6 +27,7 @@ use uefi_raw::protocol::network::http::{
 /// [`Protocol`]: uefi::proto::Protocol
 #[derive(Debug)]
 #[unsafe_protocol(HttpProtocol::GUID)]
+#[repr(transparent)]
 pub struct Http(HttpProtocol);
 
 impl Http {
@@ -107,9 +108,55 @@ impl Http {
     }
 }
 
+/// A token that was handed to the firmware by [`Http::request`] or
+/// [`Http::response`] and has not completed yet.
+struct PendingToken<'a> {
+    http: &'a mut Http,
+    token: &'a mut HttpToken,
+}
+
+impl<'a> PendingToken<'a> {
+    /// Sends the request described by `token`.
+    fn request(http: &'a mut Http, token: &'a mut HttpToken) -> uefi::Result<Self> {
+        http.request(token)?;
+        Ok(Self { http, token })
+    }
+
+    /// Starts receiving the response described by `token`.
+    fn response(http: &'a mut Http, token: &'a mut HttpToken) -> uefi::Result<Self> {
+        http.response(token)?;
+        Ok(Self { http, token })
+    }
+
+    /// Polls the network stack until the token completes and returns its
+    /// final status.
+    fn wait(self) -> uefi::Result<Status> {
+        let mut polls = 0;
+        while self.token.status == Status::NOT_READY {
+            self.http.poll()?;
+            polls += 1;
+        }
+        debug!(
+            "http: token completed after {polls} polls with {}",
+            self.token.status
+        );
+        Ok(self.token.status)
+    }
+}
+
+impl Drop for PendingToken<'_> {
+    fn drop(&mut self) {
+        if self.token.status == Status::NOT_READY {
+            // Nothing sensible can be done if cancelling fails.
+            let _ = self.http.cancel(self.token);
+        }
+    }
+}
+
 /// HTTP Service Binding Protocol.
 #[derive(Debug)]
 #[unsafe_protocol(HttpProtocol::SERVICE_BINDING_GUID)]
+#[repr(transparent)]
 pub struct HttpBinding(ServiceBindingProtocol);
 
 impl HttpBinding {
@@ -164,6 +211,33 @@ pub struct HttpHelper {
     protocol: Option<ScopedProtocol<Http>>,
 }
 
+/// Frees the headers of a response message.
+///
+/// The driver allocates the header array as well as each field name and
+/// value from the pool, and the caller has to free all of them.
+///
+/// # Safety
+///
+/// `msg` must be a response message filled by the driver.
+unsafe fn free_response_headers(msg: &HttpMessage) {
+    let Some(headers) = NonNull::new(msg.header) else {
+        return;
+    };
+    for i in 0..msg.header_count {
+        // SAFETY: The driver wrote `header_count` entries.
+        let header = unsafe { &*headers.as_ptr().add(i) };
+        for field in [header.field_name, header.field_value] {
+            if let Some(field) = NonNull::new(field.cast_mut()) {
+                // SAFETY: The string was allocated by the matching UEFI
+                // allocator.
+                let _ = unsafe { boot::free_pool(field.cast()) };
+            }
+        }
+    }
+    // SAFETY: The array was allocated by the matching UEFI allocator.
+    let _ = unsafe { boot::free_pool(headers.cast()) };
+}
+
 impl HttpHelper {
     /// Create new HTTP helper instance for the given NIC handle.
     pub fn new(nic_handle: Handle) -> uefi::Result<Self> {
@@ -209,7 +283,7 @@ impl HttpHelper {
 
     /// Configure the HTTP Protocol with some sane defaults.
     pub fn configure(&mut self) -> uefi::Result<()> {
-        let ip4 = HttpV4AccessPoint {
+        let mut ip4 = HttpV4AccessPoint {
             use_default_addr: true.into(),
             ..Default::default()
         };
@@ -218,7 +292,9 @@ impl HttpHelper {
             http_version: HttpVersion::HTTP_VERSION_10,
             time_out_millisec: 10_000,
             local_addr_is_ipv6: false.into(),
-            access_point: HttpAccessPoint { ipv4_node: &ip4 },
+            access_point: HttpAccessPoint {
+                ipv4_node: &mut ip4,
+            },
         };
 
         self.protocol.as_mut().unwrap().configure(&config)?;
@@ -274,24 +350,12 @@ impl HttpHelper {
         };
 
         let p = self.protocol.as_mut().unwrap();
-        p.request(&mut tx_token)?;
+        let pending = PendingToken::request(p, &mut tx_token)?;
         debug!("http: request sent ok");
 
-        let mut polls = 0;
-        loop {
-            if tx_token.status != Status::NOT_READY {
-                break;
-            }
-            polls += 1;
-            p.poll()?;
-        }
-        debug!(
-            "http: request token completed after {polls} polls with {}",
-            tx_token.status
-        );
-
-        if tx_token.status != Status::SUCCESS {
-            return Err(tx_token.status.into());
+        let status = pending.wait()?;
+        if status != Status::SUCCESS {
+            return Err(status.into());
         };
 
         debug!("http: request status ok");
@@ -339,22 +403,14 @@ impl HttpHelper {
         };
 
         let p = self.protocol.as_mut().unwrap();
-        p.response(&mut rx_token)?;
+        let status = PendingToken::response(p, &mut rx_token)?.wait()?;
 
-        loop {
-            if rx_token.status != Status::NOT_READY {
-                break;
-            }
-            p.poll()?;
-        }
+        debug!("http: response: {status} / {:?}", rx_rsp.status_code);
 
-        debug!(
-            "http: response: {} / {:?}",
-            rx_token.status, rx_rsp.status_code
-        );
-
-        if rx_token.status != Status::SUCCESS && rx_token.status != Status::HTTP_ERROR {
-            return Err(rx_token.status.into());
+        if status != Status::SUCCESS && status != Status::HTTP_ERROR {
+            // SAFETY: `rx_msg` was filled by the driver.
+            unsafe { free_response_headers(&rx_msg) };
+            return Err(status.into());
         };
 
         debug!("http: headers: {}", rx_msg.header_count);
@@ -367,11 +423,15 @@ impl HttpHelper {
                 n = CStr::from_ptr((*rx_msg.header.add(i)).field_name.cast::<c_char>());
                 v = CStr::from_ptr((*rx_msg.header.add(i)).field_value.cast::<c_char>());
             }
+            // The strings come from the server and are not guaranteed to be
+            // UTF-8.
             headers.push((
-                n.to_str().unwrap().to_lowercase(),
-                String::from(v.to_str().unwrap()),
+                String::from_utf8_lossy(n.to_bytes()).to_lowercase(),
+                String::from_utf8_lossy(v.to_bytes()).into_owned(),
             ));
         }
+        // SAFETY: `rx_msg` was filled by the driver.
+        unsafe { free_response_headers(&rx_msg) };
 
         debug!("http: body: {}/{}", rx_msg.body_length, body.len());
 
@@ -400,19 +460,12 @@ impl HttpHelper {
         };
 
         let p = self.protocol.as_mut().unwrap();
-        p.response(&mut rx_token)?;
+        let status = PendingToken::response(p, &mut rx_token)?.wait()?;
 
-        loop {
-            if rx_token.status != Status::NOT_READY {
-                break;
-            }
-            p.poll()?;
-        }
+        debug!("http: response: {status}");
 
-        debug!("http: response: {}", rx_token.status);
-
-        if rx_token.status != Status::SUCCESS {
-            return Err(rx_token.status.into());
+        if status != Status::SUCCESS {
+            return Err(status.into());
         };
 
         debug!(

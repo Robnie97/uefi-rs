@@ -130,22 +130,34 @@ pub union IpAddress {
     pub v6: Ipv6Address,
 }
 
+// Ensure ABI guarantees for IpAddress.
+const _: () = {
+    #[repr(C, packed)]
+    struct PackedHelper<T>(T);
+
+    assert!(align_of::<IpAddress>() == 4);
+    assert!(size_of::<IpAddress>() == 16);
+
+    // The type must be usable in a packed struct, even when it is normally
+    // 4 byte aligned.
+    assert!(align_of::<PackedHelper<IpAddress>>() == 1);
+    assert!(size_of::<PackedHelper<IpAddress>>() == 16);
+};
+
 impl IpAddress {
     /// Zeroed variant where all bytes are guaranteed to be initialized to zero.
     pub const ZERO: Self = Self { addr: [0; 4] };
 
     /// Construct a new IPv4 address.
     ///
-    /// The type won't know that it is an IPv6 address and additional context
-    /// is needed.
-    ///
-    /// # Safety
-    /// The constructor only initializes the bytes needed for IPv4 addresses.
+    /// The type won't know that it is an IPv4 address and additional context
+    /// is needed. The bytes not covered by the IPv4 address are zero.
     #[must_use]
     pub const fn new_v4(octets: [u8; 4]) -> Self {
-        Self {
-            v4: Ipv4Address(octets),
-        }
+        // Fully initialize all bytes first.
+        let mut addr = Self::ZERO;
+        addr.v4 = Ipv4Address(octets);
+        addr
     }
 
     /// Construct a new IPv6 address.
@@ -355,20 +367,6 @@ mod tests {
         assert_eq!(efi_mac_addr.into_ethernet_addr(), ethernet_octets);
     }
 
-    // Ensure that our IpAddress type can be put into a packed struct,
-    // even when it is normally 4 byte aligned.
-    #[test]
-    fn test_efi_ip_address_abi() {
-        #[repr(C, packed)]
-        struct PackedHelper<T>(T);
-
-        assert_eq!(align_of::<IpAddress>(), 4);
-        assert_eq!(size_of::<IpAddress>(), 16);
-
-        assert_eq!(align_of::<PackedHelper<IpAddress>>(), 1);
-        assert_eq!(size_of::<PackedHelper<IpAddress>>(), 16);
-    }
-
     /// Tests the From-impls from the documentation.
     #[test]
     fn test_promised_from_impls() {
@@ -480,5 +478,16 @@ mod tests {
         };
         let expected = [42, 42, 42, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 42, 42];
         assert_eq!(ipv6_addr.octets(), expected);
+    }
+
+    /// `new_v4` must initialize all 16 bytes so that the value can be
+    /// byte-copied as a whole, e.g. into a device path node.
+    #[test]
+    fn test_new_v4_initializes_all_bytes() {
+        let uefi_addr = IpAddress::new_v4(TEST_IPV4);
+        // SAFETY: `new_v4` initializes the whole union.
+        let words = unsafe { uefi_addr.addr };
+        assert_eq!(words[0], u32::from_ne_bytes(TEST_IPV4));
+        assert_eq!(words[1..], [0; 3]);
     }
 }

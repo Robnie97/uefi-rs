@@ -89,14 +89,39 @@ pub struct PcrEvent {
 }
 
 impl PcrEvent {
-    pub(super) const unsafe fn from_ptr<'a>(ptr: *const u8) -> &'a Self {
+    /// Size of everything but the event data.
+    const HEADER_SIZE: usize =
+        size_of::<PcrIndex>() + size_of::<EventType>() + size_of::<Sha1Digest>() + size_of::<u32>();
+
+    /// Creates a reference to the event at `ptr`.
+    ///
+    /// `last_entry` is the start of the last event in the log. Events are
+    /// contiguous, so an event before it must end at or before it, and
+    /// `None` is returned if it does not. The log does not report where the
+    /// last event ends, so the size of that event cannot be checked.
+    ///
+    /// # Safety
+    ///
+    /// The memory from `ptr` up to `last_entry`, or up to the end of the
+    /// event if `ptr` is the last entry, must be valid for reads.
+    pub(super) unsafe fn from_ptr<'a>(ptr: *const u8, last_entry: *const u8) -> Option<&'a Self> {
+        // `None` for the last event, whose end is unknown.
+        let available = (ptr < last_entry).then(|| last_entry.addr() - ptr.addr());
+        let fits = |size: usize| available.is_none_or(|available| size <= available);
+
+        if !fits(Self::HEADER_SIZE) {
+            return None;
+        }
         // Get the `event_size` field.
         let ptr_u32: *const u32 = ptr.cast();
         // SAFETY: The source memory may be unaligned, so this uses unaligned access.
         let event_size = unsafe { ptr_u32.add(7).read_unaligned() };
         let event_size = usize_from_u32(event_size);
+        if !fits(Self::HEADER_SIZE.checked_add(event_size)?) {
+            return None;
+        }
         // SAFETY: The memory is valid.
-        unsafe { &*ptr_meta::from_raw_parts(ptr.cast(), event_size) }
+        Some(unsafe { &*ptr_meta::from_raw_parts(ptr.cast(), event_size) })
     }
 
     /// Create a new `PcrEvent` using a byte buffer for storage.
@@ -265,6 +290,11 @@ impl EventLog<'_> {
     }
 
     /// Iterator of events in the log.
+    ///
+    /// The firmware reports where the last event starts, but not where the
+    /// log ends. Every event before the last one must end at or before the
+    /// last one, and the iterator stops at the first event that does not.
+    /// The size of the last event is taken from the log without a check.
     #[must_use]
     pub const fn iter(&self) -> EventLogIter<'_> {
         EventLogIter {
@@ -305,19 +335,21 @@ impl<'a> Iterator for EventLogIter<'a> {
             return None;
         }
 
+        // `last_entry` points to the start of the last event, so the log
+        // ends once the location moves past it. Comparing with `>` rather
+        // than for equality also ends the iteration if `last_entry` is not
+        // on an event boundary, instead of walking past the end of the log.
+        if self.location > self.log.last_entry {
+            return None;
+        }
+
         // Safety: we trust that the protocol has given us a valid range
         // of memory to read from.
         // SAFETY: The memory is valid.
-        let event = unsafe { PcrEvent::from_ptr(self.location) };
+        let event = unsafe { PcrEvent::from_ptr(self.location, self.log.last_entry) }?;
 
-        // If this is the last entry, set the location to null so that
-        // future calls to `next()` return `None`.
-        if self.location == self.log.last_entry {
-            self.location = ptr::null();
-        } else {
-            // SAFETY: The memory is valid.
-            self.location = unsafe { self.location.add(size_of_val(event)) };
-        }
+        // SAFETY: The memory is valid.
+        self.location = unsafe { self.location.add(size_of_val(event)) };
 
         Some(event)
     }
@@ -537,6 +569,75 @@ mod tests {
             event,
             &*PcrEvent::new_in_box(PcrIndex(4), EventType::IPL, digest, &data).unwrap()
         );
+    }
+
+    /// A `last_entry` that is not on an event boundary must not make the
+    /// iterator walk past the end of the log. The first event already
+    /// extends past `last_entry`, so the log is malformed and empty.
+    #[test]
+    fn test_event_log_v1_last_entry_not_on_boundary() {
+        #[rustfmt::skip]
+        let bytes = [
+            // Event 1
+            // PCR index
+            0x00, 0x00, 0x00, 0x00,
+            // Event type
+            0x08, 0x00, 0x00, 0x00,
+            // SHA1 digest
+            0x14, 0x89, 0xf9, 0x23, 0xc4, 0xdc, 0xa7, 0x29, 0x17, 0x8b,
+            0x3e, 0x32, 0x33, 0x45, 0x85, 0x50, 0xd8, 0xdd, 0xdf, 0x29,
+            // Event data size
+            0x02, 0x00, 0x00, 0x00,
+            // Event data
+            0x00, 0x00,
+
+            // Event 2
+            // PCR index
+            0x00, 0x00, 0x00, 0x00,
+            // Event type
+            0x08, 0x00, 0x00, 0x80,
+            // SHA1 digest
+            0xc7, 0x06, 0xe7, 0xdd, 0x36, 0x39, 0x29, 0x84, 0xeb, 0x06,
+            0xaa, 0xa0, 0x8f, 0xf3, 0x36, 0x84, 0x40, 0x77, 0xb3, 0xed,
+            // Event data size
+            0x02, 0x00, 0x00, 0x00,
+            // Event data
+            0x00, 0x00,
+        ];
+
+        // `last_entry` points into the middle of event 1.
+        // SAFETY: The memory is valid.
+        let log = unsafe { EventLog::new(bytes.as_ptr(), bytes.as_ptr().add(1), false) };
+        let mut iter = log.iter();
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+    }
+
+    /// An event before the last one must end at or before `last_entry`.
+    /// Otherwise its size would turn into a reference past the log.
+    #[test]
+    fn test_event_log_v1_event_size_too_large() {
+        #[rustfmt::skip]
+        let bytes = [
+            // PCR index
+            0x00, 0x00, 0x00, 0x00,
+            // Event type
+            0x08, 0x00, 0x00, 0x00,
+            // SHA1 digest
+            0x14, 0x89, 0xf9, 0x23, 0xc4, 0xdc, 0xa7, 0x29, 0x17, 0x8b,
+            0x3e, 0x32, 0x33, 0x45, 0x85, 0x50, 0xd8, 0xdd, 0xdf, 0x29,
+            // Event data size: larger than the log
+            0x00, 0x01, 0x00, 0x00,
+            // Event data
+            0x00, 0x00,
+        ];
+
+        // `last_entry` points right after the event data.
+        // SAFETY: The memory is valid.
+        let log = unsafe { EventLog::new(bytes.as_ptr(), bytes.as_ptr().add(bytes.len()), false) };
+        let mut iter = log.iter();
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
     }
 
     #[test]

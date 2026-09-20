@@ -2,12 +2,11 @@
 
 //! Bindings for HII protocols relating to system configuration.
 
-use core::fmt::Debug;
-
+use super::QuestionId;
 use super::form_browser::BrowserActionRequest;
-use super::{FormId, QuestionId, StringId};
+use super::ifr::IfrTypeValue;
 use crate::protocol::device_path::DevicePathProtocol;
-use crate::{Boolean, Char16, Guid, Status, guid, newtype_enum};
+use crate::{Char16, Guid, Status, guid, newtype_enum};
 
 /// EFI_CONFIG_KEYWORD_HANDLER_PROTOCOL
 #[derive(Debug)]
@@ -25,7 +24,7 @@ pub struct ConfigKeywordHandlerProtocol {
         keyword_string: *const Char16,
         progress: *mut *const Char16,
         progress_err: *mut u32,
-        results: *mut *const Char16,
+        results: *mut *mut Char16,
     ) -> Status,
 }
 
@@ -71,50 +70,6 @@ newtype_enum! {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct HiiTime {
-    pub hour: u8,
-    pub minute: u8,
-    pub second: u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct HiiDate {
-    pub year: u16,
-    pub month: u8,
-    pub day: u8,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct HiiRef {
-    pub question_id: QuestionId,
-    pub form_id: FormId,
-    pub guid: Guid,
-    pub string_id: StringId,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union IfrTypeValue {
-    pub u8: u8,           // EFI_IFR_TYPE_NUM_SIZE_8
-    pub u16: u16,         // EFI_IFR_TYPE_NUM_SIZE_16
-    pub u32: u32,         // EFI_IFR_TYPE_NUM_SIZE_32
-    pub u64: u64,         // EFI_IFR_TYPE_NUM_SIZE_64
-    pub b: Boolean,       // EFI_IFR_TYPE_BOOLEAN
-    pub time: HiiTime,    // EFI_IFR_TYPE_TIME
-    pub date: HiiDate,    // EFI_IFR_TYPE_DATE
-    pub string: StringId, // EFI_IFR_TYPE_STRING, EFI_IFR_TYPE_ACTION
-    pub hii_ref: HiiRef,  // EFI_IFR_TYPE_REF
-}
-impl core::fmt::Debug for IfrTypeValue {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("EfiIfrTypeValue").finish()
-    }
-}
-
 /// EFI_HII_CONFIG_ACCESS_PROTOCOL
 #[derive(Debug)]
 #[repr(C)]
@@ -123,7 +78,7 @@ pub struct HiiConfigAccessProtocol {
         this: *const Self,
         request: *const Char16,
         progress: *mut *const Char16,
-        results: *mut *const Char16,
+        results: *mut *mut Char16,
     ) -> Status,
     pub route_config: unsafe extern "efiapi" fn(
         this: *const Self,
@@ -152,10 +107,10 @@ pub struct HiiConfigRoutingProtocol {
         this: *const Self,
         config_request: *const Char16,
         progress: *mut *const Char16,
-        results: *mut *const Char16,
+        results: *mut *mut Char16,
     ) -> Status,
     pub export_config:
-        unsafe extern "efiapi" fn(this: *const Self, results: *mut *const Char16) -> Status,
+        unsafe extern "efiapi" fn(this: *const Self, results: *mut *mut Char16) -> Status,
     pub route_config: unsafe extern "efiapi" fn(
         this: *const Self,
         configuration: *const Char16,
@@ -166,7 +121,7 @@ pub struct HiiConfigRoutingProtocol {
         config_request: *const Char16,
         block: *const u8,
         block_size: usize,
-        config: *mut *const Char16,
+        config: *mut *mut Char16,
         progress: *mut *const Char16,
     ) -> Status,
     pub config_to_block: unsafe extern "efiapi" fn(
@@ -183,7 +138,7 @@ pub struct HiiConfigRoutingProtocol {
         name: *const Char16,
         device_path: *const DevicePathProtocol,
         alt_cfg_id: *const Char16,
-        alt_cfg_resp: *mut *const Char16,
+        alt_cfg_resp: *mut *mut Char16,
     ) -> Status,
 }
 

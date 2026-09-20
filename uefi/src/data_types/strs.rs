@@ -148,7 +148,10 @@ impl CStr8 {
     ///
     /// The function will start accessing memory from `ptr` until the first
     /// null byte. It's the callers responsibility to ensure `ptr` points to
-    /// a valid null-terminated string in accessible memory.
+    /// a valid null-terminated string in accessible memory. Nothing bounds
+    /// the search, so a string without a terminator makes this function
+    /// read past its end, which is undefined behavior. The memory must
+    /// stay valid and unchanged for the lifetime `'ptr`.
     #[must_use]
     pub unsafe fn from_ptr<'ptr>(ptr: *const Char8) -> &'ptr Self {
         let mut len = 0;
@@ -257,7 +260,7 @@ impl<'a> TryFrom<&'a CStr> for &'a CStr8 {
     }
 }
 
-/// Get a Latin-1 character from a UTF-8 byte slice at the given offset.
+/// Returns a Latin-1 character from a UTF-8 byte slice at the given offset.
 ///
 /// Returns a pair containing the Latin-1 character and the number of bytes in
 /// the UTF-8 encoding of that character.
@@ -309,7 +312,7 @@ pub const fn str_num_latin1_chars(s: &str) -> usize {
     num_latin1_chars
 }
 
-/// Convert a `str` into a null-terminated Latin-1 character array.
+/// Converts a `str` into a null-terminated Latin-1 character array.
 ///
 /// Panics if the string cannot be encoded in Latin-1.
 ///
@@ -362,7 +365,10 @@ impl CStr16 {
     ///
     /// The function will start accessing memory from `ptr` until the first
     /// null character. It's the callers responsibility to ensure `ptr` points to
-    /// a valid string, in accessible memory.
+    /// a valid string, in accessible memory. Nothing bounds the search, so a
+    /// string without a terminator makes this function read past its end,
+    /// which is undefined behavior. The memory must stay valid and
+    /// unchanged for the lifetime `'ptr`.
     #[must_use]
     pub unsafe fn from_ptr<'ptr>(ptr: *const Char16) -> &'ptr Self {
         let mut len = 0;
@@ -480,7 +486,7 @@ impl CStr16 {
         unsafe { &*(ptr as *const Self) }
     }
 
-    /// Convert a [`&str`] to a `&CStr16`, backed by a buffer.
+    /// Converts a [`str`] to a `&CStr16` backed by a buffer.
     ///
     /// The input string must contain only characters representable with
     /// UCS-2, and must not contain any null characters (even at the end of
@@ -491,7 +497,7 @@ impl CStr16 {
     ///
     /// # Examples
     ///
-    /// Convert the UTF-8 string "ABC" to a `&CStr16`:
+    /// Converts the UTF-8 string "ABC" to a `&CStr16`:
     ///
     /// ```
     /// use uefi::CStr16;
@@ -528,7 +534,7 @@ impl CStr16 {
         })
     }
 
-    /// Create a `&CStr16` from an [`UnalignedSlice`] using an aligned
+    /// Creates a `&CStr16` from an [`UnalignedSlice`] using an aligned
     /// buffer for storage. The lifetime of the output is tied to `buf`,
     /// not `src`.
     pub fn from_unaligned_slice<'buf>(
@@ -607,19 +613,19 @@ impl CStr16 {
         Self::from_u16_with_nul(u16_slice)
     }
 
-    /// Returns the inner pointer to this C16 string.
+    /// Returns the inner pointer to this [`CStr16`] string.
     #[must_use]
     pub const fn as_ptr(&self) -> *const Char16 {
         self.0.as_ptr()
     }
 
-    /// Get the underlying [`Char16`]s as slice without the trailing null.
+    /// Returns the underlying [`Char16`]s as a slice without the trailing null.
     #[must_use]
     pub fn as_slice(&self) -> &[Char16] {
         &self.0[..self.num_chars()]
     }
 
-    /// Get the underlying [`Char16`]s as slice including the trailing null.
+    /// Returns the underlying [`Char16`]s as a slice including the trailing null.
     #[must_use]
     pub const fn as_slice_with_nul(&self) -> &[Char16] {
         &self.0
@@ -639,7 +645,7 @@ impl CStr16 {
         unsafe { &*(ptr::from_ref(&self.0) as *const [u16]) }
     }
 
-    /// Returns an iterator over this C string
+    /// Returns an iterator over this C string.
     #[must_use]
     pub const fn iter(&self) -> CStr16Iter<'_> {
         CStr16Iter {
@@ -648,19 +654,19 @@ impl CStr16 {
         }
     }
 
-    /// Returns the number of characters without the trailing null. character
+    /// Returns the number of characters without the trailing null character.
     #[must_use]
     pub const fn num_chars(&self) -> usize {
         self.0.len() - 1
     }
 
-    /// Returns if the string is empty. This ignores the null character.
+    /// Returns whether the string is empty. This ignores the null character.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.num_chars() == 0
     }
 
-    /// Get the number of bytes in the string (including the trailing null).
+    /// Returns the number of bytes in the string, including the trailing null.
     #[must_use]
     pub const fn num_bytes(&self) -> usize {
         self.0.len() * 2
@@ -806,7 +812,7 @@ impl PartialEq<CString16> for &CStr16 {
 pub struct PoolString(PoolAllocation);
 
 impl PoolString {
-    /// Create a [`PoolString`] from a [`CStr16`] residing in a buffer allocated
+    /// Creates a [`PoolString`] from a [`CStr16`] residing in a buffer allocated
     /// using [`allocate_pool()`][cbap].
     ///
     /// # Safety
@@ -832,7 +838,7 @@ impl Deref for PoolString {
 }
 
 impl UnalignedSlice<'_, u16> {
-    /// Create a [`CStr16`] from an [`UnalignedSlice`] using an aligned
+    /// Creates a [`CStr16`] from an [`UnalignedSlice`] using an aligned
     /// buffer for storage. The lifetime of the output is tied to `buf`,
     /// not `self`.
     pub fn to_cstr16<'buf>(
@@ -850,7 +856,8 @@ impl UnalignedSlice<'_, u16> {
 /// get the other direction (`right.eq_str_until_nul(&left)`) for free. Hence, the relation is
 /// reflexive.
 pub trait EqStrUntilNul<StrType: ?Sized> {
-    /// Checks if the provided Rust string `StrType` is equal to [Self] until the first null character
+    /// Checks whether the provided Rust string `StrType` equals [`Self`] until
+    /// the first null character.
     /// is found. An exception is the terminating null character of [Self] which is ignored.
     ///
     /// As soon as the first null character in either `&self` or `other` is found, this method returns.
@@ -876,7 +883,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cstr8, cstr16};
+    use crate::{char16, cstr8, cstr16};
     use alloc::format;
     use alloc::string::String;
 
@@ -957,31 +964,19 @@ mod tests {
 
         // Invalid: no nul character.
         assert_eq!(
-            CStr16::from_char16_until_nul(&[
-                Char16::try_from('a').unwrap(),
-                Char16::try_from('b').unwrap(),
-            ]),
+            CStr16::from_char16_until_nul(&[char16!('a'), char16!('b'),]),
             Err(FromSliceUntilNulError::NoNul)
         );
 
         // Valid: trailing nul.
         assert_eq!(
-            CStr16::from_char16_until_nul(&[
-                Char16::try_from('a').unwrap(),
-                Char16::try_from('b').unwrap(),
-                NUL_16,
-            ]),
+            CStr16::from_char16_until_nul(&[char16!('a'), char16!('b'), NUL_16,]),
             Ok(cstr16!("ab"))
         );
 
         // Valid: interior nul.
         assert_eq!(
-            CStr16::from_char16_until_nul(&[
-                Char16::try_from('a').unwrap(),
-                NUL_16,
-                Char16::try_from('b').unwrap(),
-                NUL_16
-            ]),
+            CStr16::from_char16_until_nul(&[char16!('a'), NUL_16, char16!('b'), NUL_16]),
             Ok(cstr16!("a"))
         );
     }
@@ -996,31 +991,19 @@ mod tests {
 
         // Invalid: interior null.
         assert_eq!(
-            CStr16::from_char16_with_nul(&[
-                Char16::try_from('a').unwrap(),
-                NUL_16,
-                Char16::try_from('b').unwrap(),
-                NUL_16
-            ]),
+            CStr16::from_char16_with_nul(&[char16!('a'), NUL_16, char16!('b'), NUL_16]),
             Err(FromSliceWithNulError::InteriorNul(1))
         );
 
         // Invalid: no trailing null.
         assert_eq!(
-            CStr16::from_char16_with_nul(&[
-                Char16::try_from('a').unwrap(),
-                Char16::try_from('b').unwrap(),
-            ]),
+            CStr16::from_char16_with_nul(&[char16!('a'), char16!('b'),]),
             Err(FromSliceWithNulError::NotNulTerminated)
         );
 
         // Valid.
         assert_eq!(
-            CStr16::from_char16_with_nul(&[
-                Char16::try_from('a').unwrap(),
-                Char16::try_from('b').unwrap(),
-                NUL_16,
-            ]),
+            CStr16::from_char16_with_nul(&[char16!('a'), char16!('b'), NUL_16,]),
             Ok(cstr16!("ab"))
         );
     }
@@ -1108,11 +1091,8 @@ mod tests {
     #[test]
     fn test_cstr16_as_slice() {
         let string: &CStr16 = cstr16!("a");
-        assert_eq!(string.as_slice(), &[Char16::try_from('a').unwrap()]);
-        assert_eq!(
-            string.as_slice_with_nul(),
-            &[Char16::try_from('a').unwrap(), NUL_16]
-        );
+        assert_eq!(string.as_slice(), &[char16!('a')]);
+        assert_eq!(string.as_slice_with_nul(), &[char16!('a'), NUL_16]);
     }
 
     #[test]

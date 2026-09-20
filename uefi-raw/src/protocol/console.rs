@@ -48,7 +48,7 @@ pub struct AbsolutePointerProtocol {
     pub get_state:
         unsafe extern "efiapi" fn(this: *const Self, state: *mut AbsolutePointerState) -> Status,
     pub wait_for_input: Event,
-    pub mode: *mut AbsolutePointerMode,
+    pub mode: *const AbsolutePointerMode,
 }
 
 impl AbsolutePointerProtocol {
@@ -134,8 +134,10 @@ pub struct SimpleTextInputExProtocol {
         notification_fn: KeyNotifyFn,
         notify_handle: *mut *mut core::ffi::c_void,
     ) -> Status,
-    pub unregister_key_notify:
-        unsafe extern "efiapi" fn(this: *mut Self, notify_handle: *mut core::ffi::c_void) -> Status,
+    pub unregister_key_notify: unsafe extern "efiapi" fn(
+        this: *mut Self,
+        notify_handle: *const core::ffi::c_void,
+    ) -> Status,
 }
 
 impl SimpleTextInputExProtocol {
@@ -160,7 +162,7 @@ pub struct SimpleTextOutputProtocol {
     pub output_string: unsafe extern "efiapi" fn(this: *mut Self, string: *const Char16) -> Status,
     pub test_string: unsafe extern "efiapi" fn(this: *mut Self, string: *const Char16) -> Status,
     pub query_mode: unsafe extern "efiapi" fn(
-        this: *mut Self,
+        this: *const Self,
         mode: usize,
         columns: *mut usize,
         rows: *mut usize,
@@ -171,7 +173,7 @@ pub struct SimpleTextOutputProtocol {
     pub set_cursor_position:
         unsafe extern "efiapi" fn(this: *mut Self, column: usize, row: usize) -> Status,
     pub enable_cursor: unsafe extern "efiapi" fn(this: *mut Self, visible: Boolean) -> Status,
-    pub mode: *mut SimpleTextOutputMode,
+    pub mode: *const SimpleTextOutputMode,
 }
 
 impl SimpleTextOutputProtocol {
@@ -203,7 +205,7 @@ pub struct SimplePointerState {
 pub struct SimplePointerProtocol {
     pub reset: unsafe extern "efiapi" fn(this: *mut Self, extended_verification: Boolean) -> Status,
     pub get_state:
-        unsafe extern "efiapi" fn(this: *mut Self, state: *mut SimplePointerState) -> Status,
+        unsafe extern "efiapi" fn(this: *const Self, state: *mut SimplePointerState) -> Status,
     pub wait_for_input: Event,
     pub mode: *const SimplePointerMode,
 }
@@ -219,7 +221,7 @@ pub struct GraphicsOutputProtocol {
         *const Self,
         mode_number: u32,
         size_of_info: *mut usize,
-        info: *mut *const GraphicsOutputModeInformation,
+        info: *mut *mut GraphicsOutputModeInformation,
     ) -> Status,
     pub set_mode: unsafe extern "efiapi" fn(*mut Self, mode_number: u32) -> Status,
     pub blt: unsafe extern "efiapi" fn(
@@ -236,7 +238,7 @@ pub struct GraphicsOutputProtocol {
         height: usize,
         delta: usize,
     ) -> Status,
-    pub mode: *mut GraphicsOutputProtocolMode,
+    pub mode: *const GraphicsOutputProtocolMode,
 }
 
 impl GraphicsOutputProtocol {
@@ -248,7 +250,7 @@ impl GraphicsOutputProtocol {
 pub struct GraphicsOutputProtocolMode {
     pub max_mode: u32,
     pub mode: u32,
-    pub info: *mut GraphicsOutputModeInformation,
+    pub info: *const GraphicsOutputModeInformation,
     pub size_of_info: usize,
     pub frame_buffer_base: PhysicalAddress,
     pub frame_buffer_size: usize,
@@ -324,4 +326,15 @@ newtype_enum! {
         BLT_VIDEO_TO_VIDEO = 3,
         GRAPHICS_OUTPUT_BLT_OPERATION_MAX = 4,
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct EdidDiscoveredProtocol {
+    pub size_of_edid: u32,
+    pub edid: *const u8,
+}
+
+impl EdidDiscoveredProtocol {
+    pub const GUID: Guid = guid!("1c0c34f6-d380-41fa-a049-8ad06c1a66aa");
 }

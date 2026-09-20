@@ -19,18 +19,18 @@ pub struct EdkiiIommuProtocol {
     pub set_attribute: unsafe extern "efiapi" fn(
         this: *const Self,
         device_handle: Handle,
-        mapping: *mut c_void,
+        mapping: *const c_void,
         iommu_access: EdkiiIommuAccess,
     ) -> Status,
     pub map: unsafe extern "efiapi" fn(
         this: *const Self,
         operation: EdkiiIommuOperation,
-        host_address: *mut c_void,
+        host_address: *const c_void,
         number_of_bytes: *mut usize,
         device_address: *mut u64,
         mapping: *mut *mut c_void,
     ) -> Status,
-    pub unmap: unsafe extern "efiapi" fn(this: *const Self, mapping: *mut c_void) -> Status,
+    pub unmap: unsafe extern "efiapi" fn(this: *const Self, mapping: *const c_void) -> Status,
     pub allocate_buffer: unsafe extern "efiapi" fn(
         this: *const Self,
         allocate_type: AllocateType,
@@ -42,7 +42,7 @@ pub struct EdkiiIommuProtocol {
     pub free_buffer: unsafe extern "efiapi" fn(
         this: *const Self,
         pages: usize,
-        host_address: *mut c_void,
+        host_address: *const c_void,
     ) -> Status,
 }
 
@@ -93,7 +93,7 @@ impl EdkiiIommuAttribute {
 
     /// Invalid attributes for allocate_buffer (all bits except valid)
     pub const INVALID_FOR_ALLOCATE_BUFFER: Self =
-        Self::from_bits_truncate(!Self::VALID_FOR_ALLOCATE_BUFFER.bits());
+        Self::from_bits_retain(!Self::VALID_FOR_ALLOCATE_BUFFER.bits());
 }
 
 bitflags! {

@@ -9,9 +9,11 @@ pub fn test() {
 
     unsafe {
         serial::test();
-        gop::test();
+        gop::gop_test();
     }
-    pointer::test();
+    pointer::test_pointer();
+    pointer::test_absolute_pointer();
+    gop::test_edid_discovered();
 }
 
 mod gop;

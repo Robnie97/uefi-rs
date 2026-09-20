@@ -15,7 +15,7 @@ use crate::{Error, StatusExt};
 /// This database contains internationalized strings, as well as a description of all
 /// supported BIOS settings, together with their logic (e.g.: option A blocks option B if value is `true`).
 ///
-/// # UEFI Spec Description
+/// # UEFI Specification
 ///
 /// Database manager for HII-related data structures.
 #[derive(Debug)]
@@ -41,7 +41,11 @@ impl HiiDatabase {
                         buf.as_mut_ptr().cast(),
                     )
                 };
-                status.to_result_with_err(|_| Some(size)).map(|_| buf)
+                // The firmware may write less than it announced, so only
+                // return the part it actually filled.
+                status
+                    .to_result_with_err(|_| Some(size))
+                    .map(|_| &mut buf[..size])
             }
         }
 

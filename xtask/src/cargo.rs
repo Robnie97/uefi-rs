@@ -21,7 +21,7 @@ impl Package {
     fn name(self) -> &'static str {
         match self {
             Self::Uefi => "uefi",
-            Self::UefiApp => "uefi_app",
+            Self::UefiApp => "uefi-app",
             Self::UefiMacros => "uefi-macros",
             Self::UefiRaw => "uefi-raw",
             Self::UefiTestRunner => "uefi-test-runner",
@@ -212,7 +212,7 @@ pub enum CargoAction {
 
 /// Get a modified PATH to remove entries added by rustup. This is
 /// necessary on Windows, see
-/// https://github.com/rust-lang/rustup/issues/3031.
+/// <https://github.com/rust-lang/rustup/issues/3031>.
 fn sanitized_path(orig_path: OsString) -> OsString {
     // Modify the PATH to remove entries added by rustup. This is
     // necessary on Windows, see https://github.com/rust-lang/rustup/issues/3031.

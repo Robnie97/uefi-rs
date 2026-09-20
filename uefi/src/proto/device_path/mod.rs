@@ -247,37 +247,45 @@ pub struct DevicePathNode {
 }
 
 impl DevicePathNode {
-    /// Create a [`DevicePathNode`] reference from an opaque pointer.
+    /// Creates a [`DevicePathNode`] reference from an opaque pointer.
     ///
     /// # Safety
     ///
     /// The input pointer must point to valid data. That data must
     /// remain valid for the lifetime `'a`, and cannot be mutated during
-    /// that lifetime.
+    /// that lifetime. The length of the node is taken from its header, so
+    /// the memory must be readable for at least that many bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the node's length is smaller than the size of
+    /// [`DevicePathHeader`], which violates the UEFI specification.
     #[must_use]
     pub unsafe fn from_ffi_ptr<'a>(ptr: *const FfiDevicePath) -> &'a Self {
         // SAFETY: The memory is valid.
         let header = unsafe { *ptr.cast::<DevicePathHeader>() };
 
-        let data_len = usize::from(header.length()) - size_of::<DevicePathHeader>();
+        let data_len = usize::from(header.length())
+            .checked_sub(size_of::<DevicePathHeader>())
+            .expect("device path node length should cover the node header");
         // SAFETY: The memory is valid.
         unsafe { &*ptr_meta::from_raw_parts(ptr.cast(), data_len) }
     }
 
-    /// Cast to a [`FfiDevicePath`] pointer.
+    /// Casts this node to a [`FfiDevicePath`] pointer.
     #[must_use]
     pub const fn as_ffi_ptr(&self) -> *const FfiDevicePath {
         let ptr: *const Self = self;
         ptr.cast::<FfiDevicePath>()
     }
 
-    /// Type of device
+    /// Returns the device type.
     #[must_use]
     pub const fn device_type(&self) -> DeviceType {
         self.header.device_type()
     }
 
-    /// Sub type of device
+    /// Returns the device subtype.
     #[must_use]
     pub const fn sub_type(&self) -> DeviceSubType {
         self.header.sub_type()
@@ -289,13 +297,14 @@ impl DevicePathNode {
         (self.device_type(), self.sub_type())
     }
 
-    /// Size (in bytes) of the full [`DevicePathNode`], including the header.
+    /// Returns the size in bytes of the full [`DevicePathNode`], including the
+    /// header.
     #[must_use]
     pub const fn length(&self) -> u16 {
         self.header.length()
     }
 
-    /// True if this node ends an entire [`DevicePath`].
+    /// Returns whether this node ends an entire [`DevicePath`].
     #[must_use]
     pub fn is_end_entire(&self) -> bool {
         self.full_type() == (DeviceType::END, DeviceSubType::END_ENTIRE)
@@ -307,7 +316,7 @@ impl DevicePathNode {
         &self.data
     }
 
-    /// Convert from a generic [`DevicePathNode`] reference to an enum
+    /// Converts a generic [`DevicePathNode`] reference to an enum
     /// of more specific node types.
     pub fn as_enum(&self) -> Result<DevicePathNodeEnum<'_>, NodeConversionError> {
         DevicePathNodeEnum::try_from(self)
@@ -338,13 +347,17 @@ impl DevicePathNode {
 #[cfg(feature = "alloc")]
 impl Display for DevicePathNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if boot::are_boot_services_active() {
-            let cstring16 = self
-                .to_string16(DisplayOnly(true), AllowShortcuts(true))
-                .unwrap();
-            write!(f, "{}", cstring16)
-        } else {
-            write!(f, "<device path node: {} bytes>", self.data.len())
+        // The conversion needs boot services, the device path to text
+        // protocol and pool memory, none of which is guaranteed.
+        let text = boot::are_boot_services_active()
+            .then(|| {
+                self.to_string16(DisplayOnly(true), AllowShortcuts(true))
+                    .ok()
+            })
+            .flatten();
+        match text {
+            Some(text) => write!(f, "{text}"),
+            None => write!(f, "<device path node: {} bytes>", self.data.len()),
         }
     }
 }
@@ -400,7 +413,7 @@ pub struct DevicePathInstance {
 }
 
 impl DevicePathInstance {
-    /// Get an iterator over the [`DevicePathNodes`] in this
+    /// Returns an iterator over the [`DevicePathNodes`] in this
     /// instance. Iteration ends when any [`DeviceType::END`] node is
     /// reached.
     ///
@@ -508,6 +521,10 @@ pub struct DevicePath {
     data: [u8],
 }
 
+// References to the DST are transmuted from/to slice references; ensure
+// both have the same fat-pointer layout.
+const _: () = assert!(size_of::<&DevicePath>() == size_of::<&[u8]>());
+
 impl ProtocolPointer for DevicePath {
     unsafe fn ptr_from_ffi(ptr: *const c_void) -> *const Self {
         // SAFETY: The memory is valid.
@@ -571,26 +588,34 @@ impl DevicePath {
         Ok(total_size_in_bytes)
     }
 
-    /// Create a [`DevicePath`] reference from an opaque pointer.
+    /// Creates a [`DevicePath`] reference from an opaque pointer.
     ///
     /// # Safety
     ///
     /// The input pointer must point to valid data. That data must
     /// remain valid for the lifetime `'a`, and cannot be mutated during
-    /// that lifetime.
+    /// that lifetime. The length of the path is determined by walking its
+    /// nodes up to the end-entire node, so the data must contain one. A
+    /// path without it makes this function read past its end, which is
+    /// undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any node's length is smaller than the size of
+    /// [`DevicePathHeader`], see [`DevicePathNode::from_ffi_ptr`].
     #[must_use]
     pub unsafe fn from_ffi_ptr<'a>(ptr: *const FfiDevicePath) -> &'a Self {
         // SAFETY: The memory is valid.
         unsafe { &*Self::ptr_from_ffi(ptr.cast::<c_void>()) }
     }
 
-    /// Cast to a [`FfiDevicePath`] pointer.
+    /// Casts this path to a [`FfiDevicePath`] pointer.
     #[must_use]
     pub const fn as_ffi_ptr(&self) -> *const FfiDevicePath {
         ptr::from_ref(self).cast()
     }
 
-    /// Get an iterator over the [`DevicePathInstance`]s in this path.
+    /// Returns an iterator over the [`DevicePathInstance`]s in this path.
     #[must_use]
     pub const fn instance_iter(&self) -> DevicePathInstanceIterator<'_> {
         DevicePathInstanceIterator {
@@ -598,7 +623,7 @@ impl DevicePath {
         }
     }
 
-    /// Get an iterator over the [`DevicePathNode`]s starting at
+    /// Returns an iterator over the [`DevicePathNode`]s starting at
     /// `self`. Iteration ends when a path is reached where
     /// [`is_end_entire`][DevicePathNode::is_end_entire] is true. That ending
     /// path is not returned by the iterator.
@@ -682,13 +707,17 @@ impl DevicePath {
 #[cfg(feature = "alloc")]
 impl Display for DevicePath {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if boot::are_boot_services_active() {
-            let cstring16 = self
-                .to_string16(DisplayOnly(true), AllowShortcuts(true))
-                .unwrap();
-            write!(f, "{}", cstring16)
-        } else {
-            write!(f, "<device path: {} bytes>", self.data.len())
+        // The conversion needs boot services, the device path to text
+        // protocol and pool memory, none of which is guaranteed.
+        let text = boot::are_boot_services_active()
+            .then(|| {
+                self.to_string16(DisplayOnly(true), AllowShortcuts(true))
+                    .ok()
+            })
+            .flatten();
+        match text {
+            Some(text) => write!(f, "{text}"),
+            None => write!(f, "<device path: {} bytes>", self.data.len()),
         }
     }
 }
@@ -986,7 +1015,7 @@ impl core::error::Error for DevicePathUtilitiesError {
 #[cfg(feature = "alloc")]
 fn open_utility_protocol() -> Result<ScopedProtocol<DevicePathUtilities>, DevicePathUtilitiesError>
 {
-    let &handle = boot::locate_handle_buffer(SearchType::ByProtocol(&DevicePathToText::GUID))
+    let &handle = boot::locate_handle_buffer(SearchType::ByProtocol(&DevicePathUtilities::GUID))
         .map_err(DevicePathUtilitiesError::CantLocateHandleBuffer)?
         .first()
         .ok_or(DevicePathUtilitiesError::NoHandle)?;
@@ -1010,7 +1039,7 @@ mod tests {
     use super::*;
     use alloc::vec::Vec;
 
-    /// Create a node to `path` from raw data.
+    /// Adds a node to `path` from raw data.
     fn add_node(path: &mut Vec<u8>, device_type: u8, sub_type: u8, node_data: &[u8]) {
         path.push(device_type);
         path.push(sub_type);
@@ -1022,7 +1051,7 @@ mod tests {
         path.extend(node_data);
     }
 
-    /// Create a test device path list as raw bytes.
+    /// Creates a test device path list as raw bytes.
     fn create_raw_device_path() -> Vec<u8> {
         let mut raw_data = Vec::new();
 
@@ -1048,7 +1077,7 @@ mod tests {
         raw_data
     }
 
-    /// Check that `node` has the expected content.
+    /// Checks that `node` has the expected content.
     fn check_node(node: &DevicePathNode, device_type: u8, sub_type: u8, node_data: &[u8]) {
         assert_eq!(node.device_type().0, device_type);
         assert_eq!(node.sub_type().0, sub_type);
@@ -1118,9 +1147,6 @@ mod tests {
 
     #[test]
     fn test_to_owned() {
-        // Relevant assertion to verify the transmute is fine.
-        assert_eq!(size_of::<&DevicePath>(), size_of::<&[u8]>());
-
         let raw_data = create_raw_device_path();
         // SAFETY: The memory is valid.
         let dp = unsafe { DevicePath::from_ffi_ptr(raw_data.as_ptr().cast()) };
@@ -1200,6 +1226,24 @@ mod tests {
         ];
 
         assert!(<&DevicePath>::try_from(raw_data.as_slice()).is_err());
+    }
+
+    /// A node length below the header size violates the spec. The raw
+    /// pointer path must panic instead of underflowing the data length.
+    #[test]
+    #[should_panic(expected = "device path node length should cover the node header")]
+    fn test_device_path_from_ffi_ptr_rejects_zero_node_length() {
+        let raw_data = [0xa0, 0xb0, 0x00, 0x00];
+        // SAFETY: The memory is valid.
+        let _ = unsafe { DevicePath::from_ffi_ptr(raw_data.as_ptr().cast()) };
+    }
+
+    #[test]
+    #[should_panic(expected = "device path node length should cover the node header")]
+    fn test_device_path_from_ffi_ptr_rejects_short_node_length() {
+        let raw_data = [0xa0, 0xb0, 0x03, 0x00];
+        // SAFETY: The memory is valid.
+        let _ = unsafe { DevicePath::from_ffi_ptr(raw_data.as_ptr().cast()) };
     }
 
     /// Test converting from `&DevicePathNode` to a specific node type.

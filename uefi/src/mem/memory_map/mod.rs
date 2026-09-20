@@ -8,19 +8,17 @@
 //! to guarantee a streamlined API across these types. We recommend to work with
 //! the specific implementation.
 //!
-//! # Usecase: Obtain UEFI Memory Map
+//! # Obtaining a UEFI Memory Map
 //!
-//! You can use [`boot::exit_boot_services`] or
-//! [`boot::memory_map`], which returns an properly initialized
-//! [`MemoryMapOwned`].
+//! Use [`boot::exit_boot_services`] or [`boot::memory_map`] to obtain a
+//! properly initialized [`MemoryMapOwned`].
 //!
-//! # Usecase: Parse Memory Slice as UEFI Memory Map
+//! # Parsing a Memory Slice as a UEFI Memory Map
 //!
-//! If you have a chunk of memory and want to parse it as UEFI memory map, which
-//! might be the case if a bootloader such as GRUB or Limine passes its boot
-//! information, you can use [`MemoryMapRef`] or [`MemoryMapRefMut`].
+//! To parse memory supplied by a bootloader such as GRUB or Limine as a UEFI
+//! memory map, use [`MemoryMapRef`] or [`MemoryMapRefMut`].
 //!
-//! # All relevant exports:
+//! # Relevant Exports
 //!
 //! - the traits [`MemoryMap`] and [`MemoryMapMut`],
 //! - the trait implementations [`MemoryMapOwned`], [`MemoryMapRef`], and
@@ -134,6 +132,7 @@ mod tests_mmap_artificial {
 
         const BASE: MemoryDescriptor = MemoryDescriptor {
             ty: TY,
+            padding: 0,
             phys_start: 0,
             virt_start: 0,
             page_count: 0,
@@ -171,6 +170,7 @@ mod tests_mmap_artificial {
         const TY: MemoryType = MemoryType::RESERVED;
 
         const BASE: MemoryDescriptor = MemoryDescriptor {
+            padding: 0,
             ty: TY,
             phys_start: 0,
             virt_start: 0,
@@ -275,6 +275,7 @@ mod tests_mmap_real {
         let expected = [
             MemoryDescriptor {
                 ty: MemoryType::BOOT_SERVICES_CODE,
+                padding: 0,
                 phys_start: 0x0,
                 virt_start: 0x0,
                 page_count: 0x1,
@@ -285,6 +286,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::CONVENTIONAL,
+                padding: 0,
                 phys_start: 0x1000,
                 virt_start: 0x0,
                 page_count: 0x86,
@@ -295,6 +297,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::BOOT_SERVICES_DATA,
+                padding: 0,
                 phys_start: 0x87000,
                 virt_start: 0x0,
                 page_count: 0x1,
@@ -305,6 +308,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::CONVENTIONAL,
+                padding: 0,
                 phys_start: 0x88000,
                 virt_start: 0x0,
                 page_count: 0x18,
@@ -315,6 +319,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::CONVENTIONAL,
+                padding: 0,
                 phys_start: 0x100000,
                 virt_start: 0x0,
                 page_count: 0x700,
@@ -325,6 +330,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::ACPI_NON_VOLATILE,
+                padding: 0,
                 phys_start: 0x800000,
                 virt_start: 0x0,
                 page_count: 0x8,
@@ -335,6 +341,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::CONVENTIONAL,
+                padding: 0,
                 phys_start: 0x808000,
                 virt_start: 0x0,
                 page_count: 0x3,
@@ -345,6 +352,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::ACPI_NON_VOLATILE,
+                padding: 0,
                 phys_start: 0x80b000,
                 virt_start: 0x0,
                 page_count: 0x1,
@@ -355,6 +363,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::CONVENTIONAL,
+                padding: 0,
                 phys_start: 0x80c000,
                 virt_start: 0x0,
                 page_count: 0x4,
@@ -365,6 +374,7 @@ mod tests_mmap_real {
             },
             MemoryDescriptor {
                 ty: MemoryType::ACPI_NON_VOLATILE,
+                padding: 0,
                 phys_start: 0x810000,
                 virt_start: 0x0,
                 page_count: 0xf0,

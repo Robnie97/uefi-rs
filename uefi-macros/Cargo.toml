@@ -1,7 +1,6 @@
 [package]
 name = "uefi-macros"
 version = "0.19.0"
-readme = "README.md"
 description = "Procedural macros for the `uefi` crate."
 
 authors.workspace = true
@@ -18,8 +17,8 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0.28"
 quote = "1.0.9"
-syn = { version = "2.0.4", features = ["full"] }
+syn = { version = "3.0.0", features = ["full"] }
 
 [dev-dependencies]
-trybuild = "1.0.61"
+trybuild = "1.0.120"
 uefi = { path = "../uefi", default-features = false }

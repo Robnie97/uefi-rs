@@ -19,7 +19,7 @@ use {
 /// Used to obtain files, that are primarily boot options, from arbitrary
 /// devices.
 ///
-/// # UEFI Spec Description
+/// # UEFI Specification
 /// The EFI_LOAD_FILE_PROTOCOL is a simple protocol used to obtain files from
 /// arbitrary devices.
 ///
@@ -84,7 +84,11 @@ impl LoadFile {
                     buf.as_mut_ptr().cast(),
                 )
             };
-            status.to_result_with_err(|_| Some(size)).map(|_| buf)
+            // The firmware may write less than it announced, so only return
+            // the part it actually filled.
+            status
+                .to_result_with_err(|_| Some(size))
+                .map(|_| &mut buf[..size])
         };
 
         let file: Box<[u8]> = make_boxed::<[u8], _>(fetch_data_fn)?;
@@ -97,7 +101,7 @@ impl LoadFile {
 /// The Load File2 protocol is used to obtain files from arbitrary devices that
 /// are not boot options.
 ///
-/// # UEFI Spec Description
+/// # UEFI Specification
 ///
 /// The EFI_LOAD_FILE2_PROTOCOL is a simple protocol used to obtain files from
 /// arbitrary devices that are not boot options. It is used by LoadImage() when

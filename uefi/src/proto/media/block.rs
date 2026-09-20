@@ -26,6 +26,52 @@ impl BlockIO {
         unsafe { &*self.0.media.cast::<BlockIOMedia>() }
     }
 
+    /// Returns the revision of this protocol.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.0.revision
+    }
+
+    /// Returns the first LBA that is aligned to a physical block boundary.
+    ///
+    /// Returns `None` for protocol revisions below 2, where this media
+    /// field is not present.
+    #[must_use]
+    pub const fn lowest_aligned_lba(&self) -> Option<Lba> {
+        if self.0.revision >= BlockIoProtocol::REVISION_2 {
+            Some(self.media().0.lowest_aligned_lba)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the number of logical blocks per physical block.
+    ///
+    /// Returns `None` for protocol revisions below 2, where this media
+    /// field is not present.
+    #[must_use]
+    pub const fn logical_blocks_per_physical_block(&self) -> Option<u32> {
+        if self.0.revision >= BlockIoProtocol::REVISION_2 {
+            Some(self.media().0.logical_blocks_per_physical_block)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the optimal transfer length granularity as a number of
+    /// logical blocks.
+    ///
+    /// Returns `None` for protocol revisions below 3, where this media
+    /// field is not present.
+    #[must_use]
+    pub const fn optimal_transfer_length_granularity(&self) -> Option<u32> {
+        if self.0.revision >= BlockIoProtocol::REVISION_3 {
+            Some(self.media().0.optimal_transfer_length_granularity)
+        } else {
+            None
+        }
+    }
+
     /// Resets the block device hardware.
     ///
     /// # Arguments
@@ -56,7 +102,7 @@ impl BlockIO {
     ///   the device.
     /// * `Status::INVALID_PARAMETER`  The read request contains LBAs that are not valid, or the buffer is not on
     ///   proper alignment.
-    pub fn read_blocks(&self, media_id: u32, lba: Lba, buffer: &mut [u8]) -> Result {
+    pub fn read_blocks(&mut self, media_id: u32, lba: Lba, buffer: &mut [u8]) -> Result {
         let buffer_size = buffer.len();
         // SAFETY: The memory is valid.
         unsafe {
@@ -175,24 +221,6 @@ impl BlockIOMedia {
     pub const fn last_block(&self) -> Lba {
         self.0.last_block
     }
-
-    /// Returns the first LBA that is aligned to a physical block boundary.
-    #[must_use]
-    pub const fn lowest_aligned_lba(&self) -> Lba {
-        self.0.lowest_aligned_lba
-    }
-
-    /// Returns the number of logical blocks per physical block.
-    #[must_use]
-    pub const fn logical_blocks_per_physical_block(&self) -> u32 {
-        self.0.logical_blocks_per_physical_block
-    }
-
-    /// Returns the optimal transfer length granularity as a number of logical blocks.
-    #[must_use]
-    pub const fn optimal_transfer_length_granularity(&self) -> u32 {
-        self.0.optimal_transfer_length_granularity
-    }
 }
 
 /// Asynchronous transaction token for Block I/O 2 operations.
@@ -259,7 +287,7 @@ impl BlockIO2 {
     /// * [`Status::DEVICE_ERROR`]      The device reported an error while performing the read operation.
     /// * [`Status::BAD_BUFFER_SIZE`]   The buffer size parameter is not a multiple of the intrinsic block size of the device.
     pub unsafe fn read_blocks_ex(
-        &self,
+        &mut self,
         media_id: u32,
         lba: Lba,
         token: Option<NonNull<BlockIO2Token>>,

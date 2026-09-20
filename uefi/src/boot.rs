@@ -86,7 +86,7 @@ pub unsafe fn set_image_handle(image_handle: Handle) {
     IMAGE_HANDLE.store(image_handle.as_ptr(), Ordering::Release);
 }
 
-/// Return true if boot services are active, false otherwise.
+/// Returns `true` if boot services are active and `false` otherwise.
 pub(crate) fn are_boot_services_active() -> bool {
     let Some(st) = table::system_table_raw() else {
         return false;
@@ -325,7 +325,7 @@ pub(crate) fn memory_map_size() -> MemoryMapMeta {
     mmm
 }
 
-/// Stores the current UEFI memory map in an UEFI-heap allocated buffer
+/// Stores the current UEFI memory map in a UEFI-heap-allocated buffer
 /// and returns a [`MemoryMapOwned`].
 ///
 /// The implementation tries to mitigate some UEFI pitfalls, such as getting
@@ -342,6 +342,8 @@ pub(crate) fn memory_map_size() -> MemoryMapMeta {
 ///
 /// * [`Status::INVALID_PARAMETER`]: Invalid [`MemoryType`]
 /// * [`Status::OUT_OF_RESOURCES`]: allocation failed.
+/// * [`Status::BAD_BUFFER_SIZE`]: the firmware reported a memory map larger
+///   than the buffer it was given.
 ///
 /// # Panics
 ///
@@ -371,6 +373,11 @@ pub fn memory_map(mt: MemoryType) -> Result<MemoryMapOwned> {
 /// Calls the underlying `GetMemoryMap` function of UEFI. On success,
 /// the buffer is mutated and contains the map. The map might be shorter
 /// than the buffer, which is reflected by the return value.
+///
+/// # Errors
+///
+/// * [`Status::BAD_BUFFER_SIZE`]: the firmware reported success but a map
+///   size larger than the buffer.
 pub(crate) fn get_memory_map(buf: &mut [u8]) -> Result<MemoryMapMeta> {
     let bt = boot_services_raw_panicking();
     // SAFETY: The pointer is not null and we assume it to be initialized.
@@ -398,7 +405,16 @@ pub(crate) fn get_memory_map(buf: &mut [u8]) -> Result<MemoryMapMeta> {
             &mut desc_version,
         )
     }
-    .to_result_with_val(|| MemoryMapMeta {
+    .to_result()?;
+
+    // On success, `map_size` is the size of the map written to the buffer.
+    // A value larger than the buffer would make `MemoryMapOwned` read past
+    // the allocation, so treat it as an error.
+    if map_size > buf.len() {
+        return Err(Status::BAD_BUFFER_SIZE.into());
+    }
+
+    Ok(MemoryMapMeta {
         map_size,
         desc_size,
         map_key,
@@ -491,7 +507,8 @@ pub unsafe fn create_event(
 ///
 /// # Safety
 ///
-/// The caller must ensure they are passing a valid `Guid` as `event_group`, if applicable.
+/// This function is unsafe because callbacks must handle exit from boot
+/// services correctly.
 ///
 /// # Errors
 ///
@@ -502,7 +519,7 @@ pub unsafe fn create_event_ex(
     notify_tpl: Tpl,
     notify_fn: Option<EventNotifyFn>,
     notify_ctx: Option<NonNull<c_void>>,
-    event_group: Option<NonNull<Guid>>,
+    event_group: Option<&Guid>,
 ) -> Result<Event> {
     let bt = boot_services_raw_panicking();
     // SAFETY: The pointer is not null and we assume it to be initialized.
@@ -527,7 +544,7 @@ pub unsafe fn create_event_ex(
             notify_tpl,
             notify_fn,
             opt_nonnull_to_ptr(notify_ctx),
-            opt_nonnull_to_ptr(event_group),
+            event_group.map_or(ptr::null(), ptr::from_ref),
             &mut event,
         )
     }
@@ -668,13 +685,13 @@ pub fn set_timer(event: &Event, trigger_time: TimerTrigger) -> Result {
 /// * [`Status::UNSUPPORTED`]: the current TPL is not [`Tpl::APPLICATION`].
 ///
 /// [`NOTIFY_SIGNAL`]: EventType::NOTIFY_SIGNAL
-pub fn wait_for_event(events: &mut [Event]) -> Result<usize, Option<usize>> {
+pub fn wait_for_event(events: &[Event]) -> Result<usize, Option<usize>> {
     let bt = boot_services_raw_panicking();
     // SAFETY: The pointer is not null and we assume it to be initialized.
     let bt = unsafe { bt.as_ref() };
 
     let number_of_events = events.len();
-    let events: *mut uefi_raw::Event = events.as_mut_ptr().cast();
+    let events: *const uefi_raw::Event = events.as_ptr().cast();
 
     let mut index = 0;
     // SAFETY: The memory is valid.
@@ -896,12 +913,12 @@ pub fn register_protocol_notify(
     // SAFETY: The pointer is not null and we assume it to be initialized.
     let bt = unsafe { bt.as_ref() };
 
-    let mut key = ptr::null();
+    let mut key = ptr::null_mut();
     // SAFETY: The memory is valid.
     unsafe { (bt.register_protocol_notify)(protocol, event.as_ptr(), &mut key) }.to_result_with_val(
         || {
             // OK to unwrap: key is non-null for Status::SUCCESS.
-            SearchType::ByRegisterNotify(ProtocolSearchKey(NonNull::new(key.cast_mut()).unwrap()))
+            SearchType::ByRegisterNotify(ProtocolSearchKey(NonNull::new(key).unwrap()))
         },
     )
 }
@@ -923,11 +940,22 @@ pub fn protocols_per_handle(handle: Handle) -> Result<ProtocolsPerHandle> {
 
     // SAFETY: The memory is valid.
     unsafe { (bt.protocols_per_handle)(handle.as_ptr(), &mut protocols, &mut count) }
-        .to_result_with_val(|| ProtocolsPerHandle {
-            count,
-            protocols: NonNull::new(protocols)
-                .expect("protocols_per_handle must not return a null pointer"),
-        })
+        .to_result()?;
+    // Constructed first so that `Drop` frees the pool buffer if the check
+    // below fails.
+    let guids = ProtocolsPerHandle {
+        count,
+        protocols: NonNull::new(protocols)
+            .expect("protocols_per_handle must not return a null pointer"),
+    };
+
+    // `Deref` yields references to the GUIDs, so a null entry must be
+    // rejected first.
+    // SAFETY: The firmware initialized `count` entries in the buffer.
+    if unsafe { contains_null(protocols, count) } {
+        return Err(Status::INVALID_PARAMETER.into());
+    }
+    Ok(guids)
 }
 
 /// Locates the handle of a device on the [`DevicePath`] that supports the
@@ -946,6 +974,8 @@ pub fn protocols_per_handle(handle: Handle) -> Result<ProtocolsPerHandle> {
 /// # Errors
 ///
 /// * [`Status::NOT_FOUND`]: no matching handles.
+/// * [`Status::INVALID_PARAMETER`]: the firmware reported success but
+///   returned a null remaining device path.
 pub fn locate_device_path<P: ProtocolPointer + ?Sized>(
     device_path: &mut &DevicePath,
 ) -> Result<Handle> {
@@ -957,15 +987,32 @@ pub fn locate_device_path<P: ProtocolPointer + ?Sized>(
     let mut device_path_ptr: *const uefi_raw::protocol::device_path::DevicePathProtocol =
         device_path.as_ffi_ptr().cast();
     // SAFETY: The memory is valid.
-    unsafe {
-        (bt.locate_device_path)(&P::GUID, &mut device_path_ptr, &mut handle).to_result_with_val(
-            || {
-                *device_path = DevicePath::from_ffi_ptr(device_path_ptr.cast());
-                // OK to unwrap: handle is non-null for Status::SUCCESS.
-                Handle::from_ptr(handle).unwrap()
-            },
-        )
+    unsafe { (bt.locate_device_path)(&P::GUID, &mut device_path_ptr, &mut handle) }.to_result()?;
+
+    // `from_ffi_ptr` reads the node header, so a null pointer must be
+    // rejected before it is dereferenced.
+    if device_path_ptr.is_null() {
+        return Err(Status::INVALID_PARAMETER.into());
     }
+    // SAFETY: The firmware returned a non-null pointer to a device path.
+    *device_path = unsafe { DevicePath::from_ffi_ptr(device_path_ptr.cast()) };
+    // SAFETY: The handle was returned by the firmware.
+    // OK to unwrap: handle is non-null for Status::SUCCESS.
+    Ok(unsafe { Handle::from_ptr(handle) }.unwrap())
+}
+
+/// Returns whether any of the `count` pointers starting at `ptr` is null.
+///
+/// Used to validate pointer arrays returned by the firmware before they are
+/// exposed as [`Handle`]s or references, which must not be null.
+///
+/// # Safety
+///
+/// `ptr` must be valid for reads of `count` initialized pointers.
+unsafe fn contains_null<T>(ptr: *const *const T, count: usize) -> bool {
+    // SAFETY: Guaranteed by the caller.
+    let ptrs = unsafe { slice::from_raw_parts(ptr, count) };
+    ptrs.iter().any(|p| p.is_null())
 }
 
 /// Enumerates all [`Handle`]s installed on the system which match a certain
@@ -980,6 +1027,7 @@ pub fn locate_device_path<P: ProtocolPointer + ?Sized>(
 /// * [`Status::NOT_FOUND`]: no matching handles found.
 /// * [`Status::BUFFER_TOO_SMALL`]: the buffer is not large enough. The required
 ///   size (in number of handles, not bytes) will be returned in the error data.
+/// * [`Status::INVALID_PARAMETER`]: the firmware returned a null handle.
 pub fn locate_handle<'buf>(
     search_ty: SearchType,
     buffer: &'buf mut [MaybeUninit<Handle>],
@@ -1007,7 +1055,14 @@ pub fn locate_handle<'buf>(
     match status {
         Status::SUCCESS => {
             let buffer = &buffer[..num_handles];
-            // SAFETY: the entries up to `num_handles` have been initialized.
+            // `Handle` wraps `NonNull`, so a null entry must be rejected
+            // before the entries are exposed as handles.
+            // SAFETY: The firmware initialized the entries up to `num_handles`.
+            if unsafe { contains_null(buffer.as_ptr().cast::<*const c_void>(), num_handles) } {
+                return Err(Error::new(Status::INVALID_PARAMETER, None));
+            }
+            // SAFETY: The entries up to `num_handles` have been initialized
+            // and are non-null.
             let handles = unsafe { maybe_uninit_slice_assume_init_ref(buffer) };
             Ok(handles)
         }
@@ -1029,6 +1084,7 @@ pub fn locate_handle<'buf>(
 ///
 /// * [`Status::NOT_FOUND`]: no matching handles.
 /// * [`Status::OUT_OF_RESOURCES`]: out of memory.
+/// * [`Status::INVALID_PARAMETER`]: the firmware returned a null handle.
 pub fn locate_handle_buffer(search_ty: SearchType) -> Result<HandleBuffer> {
     let bt = boot_services_raw_panicking();
     // SAFETY: The pointer is not null and we assume it to be initialized.
@@ -1046,11 +1102,22 @@ pub fn locate_handle_buffer(search_ty: SearchType) -> Result<HandleBuffer> {
     let mut buffer: *mut uefi_raw::Handle = ptr::null_mut();
     // SAFETY: The memory is valid.
     unsafe { (bt.locate_handle_buffer)(ty, guid, key, &mut num_handles, &mut buffer) }
-        .to_result_with_val(|| HandleBuffer {
-            count: num_handles,
-            buffer: NonNull::new(buffer.cast())
-                .expect("locate_handle_buffer must not return a null pointer"),
-        })
+        .to_result()?;
+    // Constructed first so that `Drop` frees the pool buffer if the check
+    // below fails.
+    let handles = HandleBuffer {
+        count: num_handles,
+        buffer: NonNull::new(buffer.cast())
+            .expect("locate_handle_buffer must not return a null pointer"),
+    };
+
+    // `Handle` wraps `NonNull`, so a null entry must be rejected before
+    // `Deref` exposes the entries as handles.
+    // SAFETY: The firmware initialized `num_handles` entries in the buffer.
+    if unsafe { contains_null(buffer.cast::<*const c_void>(), num_handles) } {
+        return Err(Status::INVALID_PARAMETER.into());
+    }
+    Ok(handles)
 }
 
 /// Returns all the handles implementing a certain [`Protocol`].
@@ -1058,6 +1125,7 @@ pub fn locate_handle_buffer(search_ty: SearchType) -> Result<HandleBuffer> {
 /// # Errors
 ///
 /// * [`Status::NOT_FOUND`]: no matching handles.
+/// * [`Status::INVALID_PARAMETER`]: the firmware returned a null handle.
 #[cfg(feature = "alloc")]
 pub fn find_handles<P: ProtocolPointer + ?Sized>() -> Result<Vec<Handle>> {
     // Search by protocol.
@@ -1269,7 +1337,7 @@ pub fn test_protocol<P: ProtocolPointer + ?Sized>(params: OpenProtocolParams) ->
     }
 }
 
-/// Loads a UEFI image into memory and return a [`Handle`] to the image.
+/// Loads a UEFI image into memory and returns a [`Handle`] to the image.
 ///
 /// There are two ways to load the image: by copying raw image data
 /// from a source buffer, or by loading the image via the
@@ -1353,9 +1421,17 @@ pub fn start_image(image_handle: Handle) -> Result {
     let mut exit_data: *mut u16 = ptr::null_mut();
 
     // SAFETY: The memory is valid.
-    unsafe {
-        (bt.start_image)(image_handle.as_ptr(), &mut exit_data_size, &mut exit_data).to_result()
+    let status =
+        unsafe { (bt.start_image)(image_handle.as_ptr(), &mut exit_data_size, &mut exit_data) };
+
+    // The image allocates the exit data from the pool and the caller of
+    // `start_image` must free it.
+    if let Some(exit_data) = NonNull::new(exit_data) {
+        // SAFETY: The buffer was allocated by the matching UEFI allocator.
+        let _ = unsafe { free_pool(exit_data.cast()) };
     }
+
+    status.to_result()
 }
 
 /// Exits the UEFI application and returns control to the UEFI component
@@ -1374,7 +1450,7 @@ pub unsafe fn exit(
     image_handle: Handle,
     exit_status: Status,
     exit_data_size: usize,
-    exit_data: *mut Char16,
+    exit_data: *const Char16,
 ) -> Result {
     let bt = boot_services_raw_panicking();
     // SAFETY: The pointer is not null and we assume it to be initialized.
@@ -1453,9 +1529,9 @@ unsafe fn get_memory_map_and_exit_boot_services(buf: &mut [u8]) -> Result<Memory
 ///   includes the [`Output`] protocols attached to stdout/stderr. The
 ///   caller must ensure that no protocol references remain.
 /// * The pool allocator is not usable after exiting boot services. Types
-///   such as [`PoolString`] which call [`free_pool`] on drop
-///   must be cleaned up before calling `exit_boot_services`, or leaked to
-///   avoid drop ever being called.
+///   such as [`PoolString`] which call [`free_pool`] on drop must be
+///   dropped before. A later drop skips the call and panics in debug
+///   builds.
 /// * All data in the memory map marked as
 ///   [`MemoryType::BOOT_SERVICES_CODE`] and
 ///   [`MemoryType::BOOT_SERVICES_DATA`] will become free memory.
@@ -1535,7 +1611,7 @@ pub unsafe fn install_configuration_table(
 
 /// Sets the watchdog timer.
 ///
-/// UEFI will start a 5-minute countdown after an UEFI image is loaded.  The
+/// UEFI will start a 5-minute countdown after a UEFI image is loaded. The
 /// image must either successfully load an OS and exit boot services in that
 /// time, or disable the watchdog.
 ///
@@ -1567,18 +1643,19 @@ pub fn set_watchdog_timer(
     // SAFETY: The pointer is not null and we assume it to be initialized.
     let bt = unsafe { bt.as_ref() };
 
-    let (data_len, data) = data
+    let (data_size, data) = data
         .map(|d| {
             assert!(
                 d.contains(&0),
                 "Watchdog data must start with a null-terminated string"
             );
-            (d.len(), d.as_mut_ptr())
+            // The spec defines the data size in bytes, not in u16 units.
+            (size_of_val(d), d.as_mut_ptr())
         })
         .unwrap_or((0, ptr::null_mut()));
 
     // SAFETY: The memory is valid.
-    unsafe { (bt.set_watchdog_timer)(timeout_in_seconds, watchdog_code, data_len, data) }
+    unsafe { (bt.set_watchdog_timer)(timeout_in_seconds, watchdog_code, data_size, data) }
         .to_result()
 }
 
@@ -1649,8 +1726,15 @@ pub struct ProtocolsPerHandle {
 
 impl Drop for ProtocolsPerHandle {
     fn drop(&mut self) {
-        // SAFETY: This pointer was allocated by the matching UEFI allocator.
-        let _ = unsafe { free_pool(self.protocols.cast::<u8>()) };
+        let active = are_boot_services_active();
+        debug_assert!(
+            active,
+            "ProtocolsPerHandle dropped after exiting boot services"
+        );
+        if active {
+            // SAFETY: This pointer was allocated by the matching UEFI allocator.
+            let _ = unsafe { free_pool(self.protocols.cast::<u8>()) };
+        }
     }
 }
 
@@ -1664,7 +1748,9 @@ impl Deref for ProtocolsPerHandle {
         //
         // * The firmware is assumed to provide a correctly-aligned pointer and
         //   array length.
-        // * The firmware is assumed to provide valid GUID pointers.
+        // * The GUID pointers were checked to be non-null in
+        //   `protocols_per_handle`. The firmware is assumed to provide valid
+        //   GUIDs behind them.
         // * Protocol GUIDs should be constants or statics, so a 'static
         //   lifetime (of the individual pointers, not the overall slice) can be
         //   assumed.
@@ -1683,8 +1769,12 @@ pub struct HandleBuffer {
 
 impl Drop for HandleBuffer {
     fn drop(&mut self) {
-        // SAFETY: This pointer was allocated by the matching UEFI allocator.
-        let _ = unsafe { free_pool(self.buffer.cast::<u8>()) };
+        let active = are_boot_services_active();
+        debug_assert!(active, "HandleBuffer dropped after exiting boot services");
+        if active {
+            // SAFETY: This pointer was allocated by the matching UEFI allocator.
+            let _ = unsafe { free_pool(self.buffer.cast::<u8>()) };
+        }
     }
 }
 
@@ -1692,7 +1782,8 @@ impl Deref for HandleBuffer {
     type Target = [Handle];
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The pointer is valid for the requested slice length.
+        // SAFETY: The pointer is valid for the requested slice length and the
+        // entries were checked to be non-null in `locate_handle_buffer`.
         unsafe { slice::from_raw_parts(self.buffer.as_ptr(), self.count) }
     }
 }
@@ -1742,6 +1833,13 @@ impl<P: Protocol + ?Sized + Display> Display for ScopedProtocol<P> {
 
 impl<P: Protocol + ?Sized> Drop for ScopedProtocol<P> {
     fn drop(&mut self) {
+        // The protocol is gone together with the boot services. The value
+        // should have been dropped before, so flag it in debug builds.
+        let active = are_boot_services_active();
+        debug_assert!(active, "ScopedProtocol dropped after exiting boot services");
+        if !active {
+            return;
+        }
         let bt = boot_services_raw_panicking();
         // SAFETY: The pointer is not null and we assume it to be initialized.
         let bt = unsafe { bt.as_ref() };
@@ -1758,9 +1856,10 @@ impl<P: Protocol + ?Sized> Drop for ScopedProtocol<P> {
         // All of the error cases for close_protocol boil down to
         // calling it with a different set of parameters than what was
         // passed to open_protocol. The public API prevents such errors,
-        // and the error can't be propagated out of drop anyway, so just
-        // assert success.
-        assert_eq!(status, Status::SUCCESS);
+        // and the error can't be propagated out of drop anyway. A panic
+        // in drop aborts the program during unwinding, so only check in
+        // debug builds.
+        debug_assert_eq!(status, Status::SUCCESS);
     }
 }
 
@@ -1822,6 +1921,11 @@ impl TplGuard {
 
 impl Drop for TplGuard {
     fn drop(&mut self) {
+        let active = are_boot_services_active();
+        debug_assert!(active, "TplGuard dropped after exiting boot services");
+        if !active {
+            return;
+        }
         let bt = boot_services_raw_panicking();
         // SAFETY: The pointer is not null and we assume it to be initialized.
         let bt = unsafe { bt.as_ref() };
@@ -1882,7 +1986,7 @@ pub enum OpenProtocolAttributes {
     /// attribute of `ByDriver`, then an attempt will be made to remove
     /// them by calling the driver's `Stop` function.
     ///
-    /// # Warning
+    /// # Warnings
     ///
     /// Opening an interface in exclusive mode can have surprising side
     /// effects. For example:
@@ -1907,7 +2011,7 @@ pub enum OpenProtocolAttributes {
     /// opened with an attribute of `ByDriver`, then an attempt will be
     /// made to remove them with `DisconnectController`.
     ///
-    /// # Warning
+    /// # Warnings
     ///
     /// See warning section of [`Exclusive`].
     ///
@@ -1984,28 +2088,20 @@ impl LoadImageSource<'_> {
         *const u8, /* buffer */
         usize,     /* buffer length */
     ) {
-        let boot_policy;
-        let device_path;
-        let source_buffer;
-        let source_size;
-        match self {
+        let (boot_policy, device_path, source_buffer, source_size) = match self {
             LoadImageSource::FromBuffer { buffer, file_path } => {
                 // Boot policy is ignored when loading from source buffer.
-                boot_policy = BootPolicy::default();
-
-                device_path = file_path.map(|p| p.as_ffi_ptr()).unwrap_or(ptr::null());
-                source_buffer = buffer.as_ptr();
-                source_size = buffer.len();
+                (
+                    BootPolicy::default(),
+                    file_path.map(|p| p.as_ffi_ptr()).unwrap_or(ptr::null()),
+                    buffer.as_ptr(),
+                    buffer.len(),
+                )
             }
             LoadImageSource::FromDevicePath {
                 device_path: d_path,
                 boot_policy: b_policy,
-            } => {
-                boot_policy = *b_policy;
-                device_path = d_path.as_ffi_ptr();
-                source_buffer = ptr::null();
-                source_size = 0;
-            }
+            } => (*b_policy, d_path.as_ffi_ptr(), ptr::null(), 0),
         };
         (boot_policy, device_path, source_buffer, source_size)
     }

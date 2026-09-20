@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::device_path::DevicePathProtocol;
-use crate::{Status, newtype_enum};
+use crate::{Event, Status, newtype_enum};
 use core::ffi::c_void;
 use uguid::{Guid, guid};
 
@@ -23,7 +23,7 @@ bitflags::bitflags! {
 
     /// Represents the `EFI_NVM_EXPRESS_PASS_THRU_ATTRIBUTES_*` defines from the UEFI specification.
     ///
-    /// # UEFI Specification Description
+    /// # UEFI Specification
     /// Tells if the interface is for physical NVM Express controllers or logical NVM Express controllers.
     ///
     /// Drivers for non-RAID NVM Express controllers will set both the `PHYSICAL` and the `LOGICAL` bit.
@@ -120,14 +120,14 @@ pub struct NvmExpressPassThruProtocol {
         this: *mut Self,
         namespace_id: u32,
         packet: *mut NvmExpressPassThruCommandPacket,
-        event: *mut c_void,
+        event: Event,
     ) -> Status,
     pub get_next_namespace:
         unsafe extern "efiapi" fn(this: *const Self, namespace_id: *mut u32) -> Status,
     pub build_device_path: unsafe extern "efiapi" fn(
         this: *const Self,
         namespace_id: u32,
-        device_path: *mut *const DevicePathProtocol,
+        device_path: *mut *mut DevicePathProtocol,
     ) -> Status,
     pub get_namespace: unsafe extern "efiapi" fn(
         this: *const Self,

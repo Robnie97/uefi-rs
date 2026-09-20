@@ -30,6 +30,10 @@ pub struct AtaRequest<'a> {
     io_align: u32,
     acb: AtaCommandBlock,
     packet: AtaPassThruCommandPacket,
+    /// Capacity of the buffer the firmware was given. The firmware reports
+    /// how much it transferred in the packet, but a bogus value must not
+    /// produce an out-of-bounds slice.
+    in_data_capacity: usize,
     in_data_buffer: Option<AlignedBuffer>,
     out_data_buffer: Option<AlignedBuffer>,
     asb: AlignedBuffer,
@@ -84,6 +88,7 @@ impl<'a> AtaRequestBuilder<'a> {
                     protocol,
                     length: AtaPassThruLength::BYTES,
                 },
+                in_data_capacity: 0,
                 in_data_buffer: None,
                 out_data_buffer: None,
                 asb,
@@ -254,6 +259,7 @@ impl<'a> AtaRequestBuilder<'a> {
         // check alignment of externally supplied buffer
         bfr.check_alignment(self.req.io_align as usize)?;
         self.req.in_data_buffer = None;
+        self.req.in_data_capacity = bfr.size();
         self.req.packet.in_data_buffer = bfr.ptr_mut().cast();
         self.req.packet.in_transfer_length = bfr.size() as u32;
         Ok(self)
@@ -268,6 +274,7 @@ impl<'a> AtaRequestBuilder<'a> {
     /// `Result<Self, LayoutError>` indicating success or a memory allocation error.
     pub fn with_read_buffer(mut self, len: usize) -> Result<Self, LayoutError> {
         let mut bfr = AlignedBuffer::from_size_align(len, self.req.io_align as usize)?;
+        self.req.in_data_capacity = bfr.size();
         self.req.packet.in_data_buffer = bfr.ptr_mut().cast();
         self.req.packet.in_transfer_length = bfr.size() as u32;
         self.req.in_data_buffer = Some(bfr);
@@ -333,13 +340,13 @@ pub struct AtaResponse<'a> {
     req: AtaRequest<'a>,
 }
 
-impl<'a> AtaResponse<'a> {
+impl AtaResponse<'_> {
     /// Retrieves the status block from the response.
     ///
     /// # Returns
     /// A reference to the [`AtaStatusBlock`] containing details about the status of the executed operation.
     #[must_use]
-    pub const fn status(&self) -> &'a AtaStatusBlock {
+    pub const fn status(&self) -> &AtaStatusBlock {
         // SAFETY: The memory is valid.
         unsafe {
             self.req
@@ -356,15 +363,20 @@ impl<'a> AtaResponse<'a> {
     /// # Returns
     /// `Option<&[u8]>`: A slice of the data read from the device, or `None` if no read buffer was used.
     #[must_use]
-    pub const fn read_buffer(&self) -> Option<&'a [u8]> {
+    pub const fn read_buffer(&self) -> Option<&[u8]> {
         if self.req.packet.in_data_buffer.is_null() {
             return None;
         }
-        // SAFETY: The memory is valid.
+        // The firmware reports the transferred length; clamp it so that a
+        // bogus value cannot produce an out-of-bounds slice.
+        let reported = self.req.packet.in_transfer_length as usize;
+        let cap = self.req.in_data_capacity;
+        let len = if reported < cap { reported } else { cap };
+        // SAFETY: The buffer holds at least `len` initialized bytes.
         unsafe {
             Some(core::slice::from_raw_parts(
                 self.req.packet.in_data_buffer.cast(),
-                self.req.packet.in_transfer_length as usize,
+                len,
             ))
         }
     }

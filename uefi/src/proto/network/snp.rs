@@ -34,13 +34,13 @@ pub struct SimpleNetwork(SimpleNetworkProtocol);
 
 impl SimpleNetwork {
     /// Change the state of a network from "Stopped" to "Started".
-    pub fn start(&self) -> Result {
+    pub fn start(&mut self) -> Result {
         // SAFETY: The memory is valid.
         unsafe { (self.0.start)(&self.0) }.to_result()
     }
 
     /// Change the state of a network interface from "Started" to "Stopped".
-    pub fn stop(&self) -> Result {
+    pub fn stop(&mut self) -> Result {
         // SAFETY: The memory is valid.
         unsafe { (self.0.stop)(&self.0) }.to_result()
     }
@@ -48,7 +48,11 @@ impl SimpleNetwork {
     /// Reset a network adapter and allocate the transmit and receive buffers
     /// required by the network interface; optionally, also request allocation of
     /// additional transmit and receive buffers.
-    pub fn initialize(&self, extra_rx_buffer_size: usize, extra_tx_buffer_size: usize) -> Result {
+    pub fn initialize(
+        &mut self,
+        extra_rx_buffer_size: usize,
+        extra_tx_buffer_size: usize,
+    ) -> Result {
         // SAFETY: The memory is valid.
         unsafe { (self.0.initialize)(&self.0, extra_rx_buffer_size, extra_tx_buffer_size) }
             .to_result()
@@ -56,21 +60,21 @@ impl SimpleNetwork {
 
     /// Reset a network adapter and reinitialize it with the parameters that were
     /// provided in the previous call to `initialize`.
-    pub fn reset(&self, extended_verification: bool) -> Result {
+    pub fn reset(&mut self, extended_verification: bool) -> Result {
         // SAFETY: The memory is valid.
         unsafe { (self.0.reset)(&self.0, Boolean::from(extended_verification)) }.to_result()
     }
 
     /// Reset a network adapter, leaving it in a state that is safe
     /// for another driver to initialize
-    pub fn shutdown(&self) -> Result {
+    pub fn shutdown(&mut self) -> Result {
         // SAFETY: The memory is valid.
         unsafe { (self.0.shutdown)(&self.0) }.to_result()
     }
 
     /// Manage the multicast receive filters of a network.
     pub fn receive_filters(
-        &self,
+        &mut self,
         enable: ReceiveFlags,
         disable: ReceiveFlags,
         reset_mcast_filter: bool,
@@ -96,7 +100,7 @@ impl SimpleNetwork {
     }
 
     /// Modify or reset the current station address, if supported.
-    pub fn station_address(&self, reset: bool, new: Option<&EfiMacAddr>) -> Result {
+    pub fn station_address(&mut self, reset: bool, new: Option<&EfiMacAddr>) -> Result {
         // SAFETY: The memory is valid.
         unsafe {
             (self.0.station_address)(
@@ -189,7 +193,7 @@ impl SimpleNetwork {
 
     /// Read the current interrupt status and recycled transmit buffer
     /// status from a network interface.
-    pub fn get_interrupt_status(&self) -> Result<InterruptStatus> {
+    pub fn get_interrupt_status(&mut self) -> Result<InterruptStatus> {
         let mut interrupt_status = InterruptStatus::empty();
         let status =
             // SAFETY: The memory is valid.
@@ -199,7 +203,7 @@ impl SimpleNetwork {
 
     /// Read the current recycled transmit buffer status from a
     /// network interface.
-    pub fn get_recycled_transmit_buffer_status(&self) -> Result<Option<NonNull<u8>>> {
+    pub fn get_recycled_transmit_buffer_status(&mut self) -> Result<Option<NonNull<u8>>> {
         let mut tx_buf: *mut c_void = ptr::null_mut();
         // SAFETY: The memory is valid.
         let status = unsafe { (self.0.get_status)(&self.0, ptr::null_mut(), &mut tx_buf) };
@@ -224,7 +228,9 @@ impl SimpleNetwork {
     ///   the corresponding [`NetworkMode`] and the `dst_addr` and `protocol`
     ///   parameters must not be `None`.
     /// - `buffer`: The buffer containing the whole network packet with all
-    ///   its payload including the header for the medium.
+    ///   its payload including the header for the medium. If `header_size`
+    ///   is nonzero, the function writes the media header into the start of
+    ///   the buffer.
     /// - `src_addr`: The optional source address.
     /// - `dst_addr`: The optional destination address.
     /// - `protocol`: Ether Type as of RFC 3232. See
@@ -235,7 +241,7 @@ impl SimpleNetwork {
     pub fn transmit(
         &self,
         header_size: usize,
-        buffer: &[u8],
+        buffer: &mut [u8],
         src_addr: Option<EfiMacAddr>,
         dst_addr: Option<EfiMacAddr>,
         protocol: Option<u16>,
@@ -246,7 +252,7 @@ impl SimpleNetwork {
                 &self.0,
                 header_size,
                 buffer.len(),
-                buffer.as_ptr().cast(),
+                buffer.as_mut_ptr().cast(),
                 src_addr.as_ref().map(ptr::from_ref).unwrap_or(ptr::null()),
                 dst_addr.as_ref().map(ptr::from_ref).unwrap_or(ptr::null()),
                 protocol.as_ref().map(ptr::from_ref).unwrap_or(ptr::null()),
@@ -292,8 +298,11 @@ impl SimpleNetwork {
     }
 
     /// Returns a reference to the Simple Network mode.
+    ///
+    /// The firmware updates the mode from the methods that take `&mut self`,
+    /// so the returned reference cannot be held across those calls.
     #[must_use]
-    pub fn mode(&self) -> &NetworkMode {
+    pub const fn mode(&self) -> &NetworkMode {
         // SAFETY: The memory is valid.
         unsafe { &*self.0.mode }
     }

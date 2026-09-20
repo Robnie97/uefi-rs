@@ -4,10 +4,11 @@
 
 use super::{HiiHandle, HiiPackageHeader, HiiPackageListHeader, KeyDescriptor};
 use crate::{Guid, Handle, Status, guid, newtype_enum};
+use core::mem::offset_of;
 
 /// EFI_HII_KEYBOARD_LAYOUT
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct HiiKeyboardLayout {
     pub layout_length: u16,
     pub guid: Guid,
@@ -15,6 +16,14 @@ pub struct HiiKeyboardLayout {
     pub descriptor_count: u8,
     pub descriptors: [KeyDescriptor; 0],
 }
+
+// Compile-time ABI check.
+const _: () = {
+    assert!(offset_of!(HiiKeyboardLayout, guid) == 2);
+    assert!(offset_of!(HiiKeyboardLayout, layout_descriptor_string_offset) == 18);
+    assert!(offset_of!(HiiKeyboardLayout, descriptor_count) == 22);
+    assert!(offset_of!(HiiKeyboardLayout, descriptors) == 23);
+};
 
 newtype_enum! {
     /// EFI_HII_DATABASE_NOTIFY_TYPE
@@ -83,7 +92,7 @@ pub struct HiiDatabaseProtocol {
     pub get_keyboard_layout: unsafe extern "efiapi" fn(
         this: *const Self,
         key_guid: *const Guid,
-        leyboard_layout_length: *mut u16,
+        keyboard_layout_length: *mut u16,
         keyboard_layout: *mut HiiKeyboardLayout,
     ) -> Status,
     pub set_keyboard_layout:

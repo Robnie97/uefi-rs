@@ -51,8 +51,13 @@ bitflags! {
         const EFI_PCI_ATTRIBUTE_IDE_PRIMARY_IO = 0x0020;
         const EFI_PCI_ATTRIBUTE_IDE_SECONDARY_IO = 0x0040;
         const EFI_PCI_ATTRIBUTE_MEMORY_WRITE_COMBINE = 0x0080;
+        const EFI_PCI_ATTRIBUTE_IO = 0x0100;
+        const EFI_PCI_ATTRIBUTE_MEMORY = 0x0200;
+        const EFI_PCI_ATTRIBUTE_BUS_MASTER = 0x0400;
         const EFI_PCI_ATTRIBUTE_MEMORY_CACHED = 0x0800;
         const EFI_PCI_ATTRIBUTE_MEMORY_DISABLE = 0x1000;
+        const EFI_PCI_ATTRIBUTE_EMBEDDED_DEVICE = 0x2000;
+        const EFI_PCI_ATTRIBUTE_EMBEDDED_ROM = 0x4000;
         const EFI_PCI_ATTRIBUTE_DUAL_ADDRESS_CYCLE = 0x8000;
         const EFI_PCI_ATTRIBUTE_ISA_IO_16 = 0x10000;
         const EFI_PCI_ATTRIBUTE_VGA_PALETTE_IO_16 = 0x20000;
@@ -60,7 +65,7 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct PciRootBridgeIoAccess {
     pub read: unsafe extern "efiapi" fn(
@@ -125,7 +130,7 @@ pub struct PciRootBridgeIoProtocol {
         alloc_ty: AllocateType,
         memory_ty: MemoryType,
         pages: usize,
-        host_addr: *mut *const c_void,
+        host_addr: *mut *mut c_void,
         attributes: u64,
     ) -> Status,
     pub free_buffer: unsafe extern "efiapi" fn(

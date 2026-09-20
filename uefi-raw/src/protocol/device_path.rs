@@ -64,6 +64,13 @@ pub struct DevicePathProtocol {
     // followed by payload (dynamically sized)
 }
 
+// Ensure ABI guarantees for DevicePathProtocol. The struct is naturally
+// packed; thus, we don't need to explicitly specify `packed`.
+const _: () = {
+    assert!(size_of::<DevicePathProtocol>() == 4);
+    assert!(align_of::<DevicePathProtocol>() == 1);
+};
+
 impl DevicePathProtocol {
     pub const GUID: Guid = guid!("09576e91-6d3f-11d2-8e39-00a0c969723b");
 
@@ -239,12 +246,12 @@ pub struct DevicePathToTextProtocol {
         device_node: *const DevicePathProtocol,
         display_only: Boolean,
         allow_shortcuts: Boolean,
-    ) -> *const Char16,
+    ) -> *mut Char16,
     pub convert_device_path_to_text: unsafe extern "efiapi" fn(
         device_path: *const DevicePathProtocol,
         display_only: Boolean,
         allow_shortcuts: Boolean,
-    ) -> *const Char16,
+    ) -> *mut Char16,
 }
 
 impl DevicePathToTextProtocol {
@@ -255,9 +262,9 @@ impl DevicePathToTextProtocol {
 #[repr(C)]
 pub struct DevicePathFromTextProtocol {
     pub convert_text_to_device_node:
-        unsafe extern "efiapi" fn(text_device_node: *const Char16) -> *const DevicePathProtocol,
+        unsafe extern "efiapi" fn(text_device_node: *const Char16) -> *mut DevicePathProtocol,
     pub convert_text_to_device_path:
-        unsafe extern "efiapi" fn(text_device_path: *const Char16) -> *const DevicePathProtocol,
+        unsafe extern "efiapi" fn(text_device_path: *const Char16) -> *mut DevicePathProtocol,
 }
 
 impl DevicePathFromTextProtocol {
@@ -271,45 +278,32 @@ pub struct DevicePathUtilitiesProtocol {
         unsafe extern "efiapi" fn(device_path: *const DevicePathProtocol) -> usize,
     pub duplicate_device_path: unsafe extern "efiapi" fn(
         device_path: *const DevicePathProtocol,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
     pub append_device_path: unsafe extern "efiapi" fn(
         src1: *const DevicePathProtocol,
         src2: *const DevicePathProtocol,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
     pub append_device_node: unsafe extern "efiapi" fn(
         device_path: *const DevicePathProtocol,
         device_node: *const DevicePathProtocol,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
     pub append_device_path_instance: unsafe extern "efiapi" fn(
         device_path: *const DevicePathProtocol,
         device_path_instance: *const DevicePathProtocol,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
     pub get_next_device_path_instance: unsafe extern "efiapi" fn(
         device_path_instance: *mut *const DevicePathProtocol,
         device_path_instance_size: *mut usize,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
     pub is_device_path_multi_instance:
         unsafe extern "efiapi" fn(device_path: *const DevicePathProtocol) -> Boolean,
     pub create_device_node: unsafe extern "efiapi" fn(
         node_type: DeviceType,
         node_sub_type: DeviceSubType,
         node_length: u16,
-    ) -> *const DevicePathProtocol,
+    ) -> *mut DevicePathProtocol,
 }
 
 impl DevicePathUtilitiesProtocol {
     pub const GUID: Guid = guid!("0379be4e-d706-437d-b037-edb82fb772a4");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Test that ensures the struct is packed. Thus, we don't need to
-    /// explicitly specify `packed`.
-    #[test]
-    fn abi() {
-        assert_eq!(size_of::<DevicePathProtocol>(), 4);
-        assert_eq!(align_of::<DevicePathProtocol>(), 1);
-    }
 }

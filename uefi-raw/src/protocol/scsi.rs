@@ -77,6 +77,11 @@ newtype_enum! {
     }
 }
 
+/// `EFI_SCSI_IO_SCSI_REQUEST_PACKET`.
+///
+/// `EFI_EXT_SCSI_PASS_THRU_SCSI_REQUEST_PACKET` has the same layout, so this
+/// type is used for both protocols. Where the two differ, the field docs say
+/// so.
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct ScsiIoScsiRequestPacket {
@@ -89,24 +94,28 @@ pub struct ScsiIoScsiRequestPacket {
 
     /// A pointer to the data buffer for reading from the device in read and bidirectional commands.
     ///
-    /// - For write and non-data commands where `in_transfer_length` is 0, this field is optional and may be `NULL`.
-    /// - If not `NULL`, the buffer must meet the alignment requirement specified by the `IoAlign` field
-    ///   in the `EFI_EXT_SCSI_PASS_THRU_MODE` structure.
+    /// - Extended SCSI Pass Thru: for write and non-data commands where `in_transfer_length` is 0,
+    ///   this field is optional and may be `NULL`.
+    /// - SCSI I/O: for write commands, this field must be `NULL`.
+    /// - If not `NULL`, the buffer must meet the alignment requirement given by the `IoAlign` field
+    ///   of `EFI_EXT_SCSI_PASS_THRU_MODE` or `EFI_SCSI_IO_PROTOCOL`, respectively.
     pub in_data_buffer: *mut c_void,
 
     /// A pointer to the data buffer for writing to the device in write and bidirectional commands.
     ///
-    /// - For read and non-data commands where `out_transfer_length` is 0, this field is optional and may be `NULL`.
-    /// - If not `NULL`, the buffer must meet the alignment requirement specified by the `IoAlign` field
-    ///   in the `EFI_EXT_SCSI_PASS_THRU_MODE` structure.
+    /// - Extended SCSI Pass Thru: for read and non-data commands where `out_transfer_length` is 0,
+    ///   this field is optional and may be `NULL`.
+    /// - SCSI I/O: for read commands, this field must be `NULL`.
+    /// - If not `NULL`, the buffer must meet the alignment requirement given by the `IoAlign` field
+    ///   of `EFI_EXT_SCSI_PASS_THRU_MODE` or `EFI_SCSI_IO_PROTOCOL`, respectively.
     pub out_data_buffer: *mut c_void,
 
     /// A pointer to the sense data generated during execution of the SCSI Request Packet.
     ///
     /// - If `sense_data_length` is 0, this field is optional and may be `NULL`.
     /// - It is recommended to allocate a buffer of at least 252 bytes to ensure the entire sense data can be captured.
-    /// - If not `NULL`, the buffer must meet the alignment requirement specified by the `IoAlign` field
-    ///   in the `EFI_EXT_SCSI_PASS_THRU_MODE` structure.
+    /// - If not `NULL`, the buffer must meet the alignment requirement given by the `IoAlign` field
+    ///   of `EFI_EXT_SCSI_PASS_THRU_MODE` or `EFI_SCSI_IO_PROTOCOL`, respectively.
     pub sense_data: *mut c_void,
 
     /// A pointer to the Command Data Block (CDB) buffer to be sent to the SCSI device.
@@ -157,8 +166,11 @@ pub struct ScsiIoScsiRequestPacket {
 pub struct ScsiIoProtocol {
     pub get_device_type:
         unsafe extern "efiapi" fn(this: *const Self, device_type: *mut ScsiIoType) -> Status,
-    pub get_device_location:
-        unsafe extern "efiapi" fn(this: *const Self, target: *mut *mut u8, lun: *mut u64) -> Status,
+    pub get_device_location: unsafe extern "efiapi" fn(
+        this: *const Self,
+        target: *const *mut u8,
+        lun: *mut u64,
+    ) -> Status,
     pub reset_bus: unsafe extern "efiapi" fn(this: *mut Self) -> Status,
     pub reset_device: unsafe extern "efiapi" fn(this: *mut Self) -> Status,
     pub execute_scsi_command: unsafe extern "efiapi" fn(
@@ -198,12 +210,12 @@ pub struct ExtScsiPassThruProtocol {
         this: *const Self,
         target: *const u8,
         lun: u64,
-        device_path: *mut *const DevicePathProtocol,
+        device_path: *mut *mut DevicePathProtocol,
     ) -> Status,
     pub get_target_lun: unsafe extern "efiapi" fn(
         this: *const Self,
         device_path: *const DevicePathProtocol,
-        target: *mut *const u8,
+        target: *const *mut u8,
         lun: *mut u64,
     ) -> Status,
     pub reset_channel: unsafe extern "efiapi" fn(this: *mut Self) -> Status,

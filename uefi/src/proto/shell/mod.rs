@@ -65,6 +65,9 @@ impl Shell {
     /// * `file_system_mapping` - The file system mapping for which to get
     ///   the current directory
     ///
+    /// The returned string is owned by the shell and is valid until the
+    /// current directory changes, see [`Self::set_current_dir`].
+    ///
     /// # Errors
     ///
     /// * [`Status::NOT_FOUND`] - Could not retrieve current directory
@@ -92,7 +95,7 @@ impl Shell {
     ///
     /// * [`Status::NOT_FOUND`] - The directory does not exist
     pub fn set_current_dir(
-        &self,
+        &mut self,
         file_system: Option<&CStr16>,
         directory: Option<&CStr16>,
     ) -> Result {
@@ -114,6 +117,9 @@ impl Shell {
     /// * `Some(<env_value>)` - &CStr16 containing the value of the
     ///   environment variable
     /// * `None` - If environment variable does not exist
+    ///
+    /// The returned string is owned by the shell and is valid until the
+    /// variable changes, see [`Self::set_var`].
     #[must_use]
     pub fn var(&self, name: &CStr16) -> Option<&CStr16> {
         let name_ptr: *const Char16 = name.as_ptr();
@@ -134,10 +140,19 @@ impl Shell {
     /// * `Vars` - Iterator over the names of the environment variables
     #[must_use]
     pub fn vars(&self) -> Vars<'_, Self> {
+        // The shell returns NULL instead of a list if there are no
+        // variables or if it fails to allocate the list.
+        static EMPTY_LIST: [u16; 1] = [0];
+
         // SAFETY: The memory is valid.
         let env_ptr = unsafe { (self.0.get_env)(ptr::null()) };
+        let names = if env_ptr.is_null() {
+            EMPTY_LIST.as_ptr().cast::<Char16>()
+        } else {
+            env_ptr.cast::<Char16>()
+        };
         Vars {
-            names: env_ptr.cast::<Char16>(),
+            names,
             protocol: self,
             _marker: PhantomData,
         }
@@ -155,7 +170,7 @@ impl Shell {
     /// # Returns
     ///
     /// * `Status::SUCCESS` - The variable was successfully set
-    pub fn set_var(&self, name: &CStr16, value: &CStr16, volatile: bool) -> Result {
+    pub fn set_var(&mut self, name: &CStr16, value: &CStr16, volatile: bool) -> Result {
         let name_ptr: *const Char16 = name.as_ptr();
         let value_ptr: *const Char16 = value.as_ptr();
         // SAFETY: The memory is valid.
@@ -168,7 +183,26 @@ mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
     use alloc::vec::Vec;
+    use core::mem::MaybeUninit;
     use uefi::cstr16;
+
+    /// Mock of `ShellProtocol::get_env` that returns no variable list.
+    unsafe extern "efiapi" fn mock_get_env_null(
+        _name: *const uefi_raw::Char16,
+    ) -> *const uefi_raw::Char16 {
+        ptr::null()
+    }
+
+    #[test]
+    fn test_vars_null_list() {
+        // Only `get_env` is called, so leave the other fields uninitialised.
+        let mut raw = MaybeUninit::<ShellProtocol>::uninit();
+        // SAFETY: Writes one field of the allocated value.
+        unsafe { (&raw mut (*raw.as_mut_ptr()).get_env).write(mock_get_env_null) };
+        // SAFETY: `Shell` is a transparent wrapper and only reads `get_env`.
+        let shell = unsafe { &*raw.as_ptr().cast::<Shell>() };
+        assert_eq!(shell.vars().count(), 0);
+    }
 
     struct ShellMock<'a> {
         inner: BTreeMap<&'a CStr16, &'a CStr16>,

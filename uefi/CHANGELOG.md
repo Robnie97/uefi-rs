@@ -1,8 +1,181 @@
 # uefi - [Unreleased]
 
 ## Added
+- Exported `data_types::FromSliceUntilNulError`.
+- Added `proto::console::pointer::AbsolutePointer` protocol.
+- Added `CString::clear` and `PathBuf::clear` functions.
+- Added `CString16::extend` function.
+- Added `proto::console::gop::EdidDiscovered` protocol.
 
 ## Changed
+- **Breaking**: Changed `Server::server_type` and the `server_type` parameter
+  of `Server::new` from `u16` to `BootstrapType`.
+- **Breaking**: Changed `fs::path::Components::Item` from `CString16` to `&[Char16]`,
+  which avoids heap allocation during iteration. Users can use the recently added
+  `CString16::extend` function to add a `&[Char16]` value to a `CString16`.
+- Fixed undefined behavior in `PciRootBridgeIo::{pci, memory, io}`. The
+  returned `PciIoAccess` held a mutable reference into the protocol instance
+  while passing a pointer to the whole instance to the firmware.
+- Fixed undefined behavior in `boot::memory_map`, which trusted the map
+  size reported by the firmware. Sorting a map larger than its buffer
+  read out of bounds.
+- Fixed undefined behavior in `system::firmware_vendor` and
+  `system::with_config_table`, which dereferenced a null vendor pointer
+  and built a slice from a misaligned configuration table.
+- Added the missing `repr(transparent)` to the `Http`, `HttpBinding` and
+  `Ip4Config2` protocol wrappers, which are created by casting a raw
+  pointer provided by the firmware.
+- Fixed undefined behavior when parsing TCG event logs. Iteration now
+  stops at the last entry instead of walking past the log, an event
+  digest count larger than the log header allows is rejected, and the
+  header offset arithmetic no longer overflows on 32-bit targets. An
+  event whose size extends past the start of the last entry is rejected
+  as well.
+- Fixed undefined behavior in `DevicePathNode::from_ffi_ptr` and the
+  functions built on it, which underflowed the node length for nodes
+  shorter than the node header. They now panic instead.
+- Fixed undefined behavior in `AlignedBuffer`, which exposed
+  uninitialized memory through its safe accessors and allocated with a
+  zero-size layout for an empty buffer.
+- Fixed undefined behavior in the internal `make_boxed` helper, which
+  deallocated with a layout that did not match the allocation when the
+  firmware reported a larger size than it wrote. This affects
+  `get_boxed_info`, `read_entry_boxed`, `get_variable_boxed`,
+  `load_file` and `HiiDatabase::export_all_raw`.
+- Fixed undefined behavior in `boot::locate_handle`,
+  `boot::locate_handle_buffer`, `boot::protocols_per_handle` and
+  `boot::locate_device_path`, which turned null pointers returned by the
+  firmware into handles or references.
+- Fixed undefined behavior in `Shell::vars`, `ShellParameters::args`,
+  `ComponentName::{driver_name, controller_name}`,
+  `ComponentName::supported_languages` and `HiiConfigRouting::export`,
+  which dereferenced null pointers returned by the firmware.
+- Fixed undefined behavior in `LoadFile::load_file`,
+  `LoadFile2::load_file` and `HiiDatabase::export_all_raw`, which
+  returned a buffer with an uninitialized tail if the firmware wrote
+  less than it reported.
+- **Breaking**: Changed `FromUefi::from_uefi` to a safe function that
+  takes the buffer and the number of bytes written by the firmware, and
+  returns a `Result`. It previously built a reference that could exceed
+  the buffer and trusted the firmware to NUL-terminate the name. The
+  required size reported by `File::get_info` now includes the trailing
+  padding of the requested type.
+- **Breaking**: `BlockIO::read_blocks` and `BlockIO2::read_blocks_ex`
+  now take `&mut self`. The firmware may update the media structure
+  during a read, which conflicted with the shared reference returned by
+  `media`.
+- Fixed undefined behavior in `UsbIo::{control_transfer,
+  sync_bulk_receive, sync_interrupt_receive}`, which let the firmware
+  write through a pointer derived from a shared reference, and in
+  `UsbIo::supported_languages`, which built a slice from a null
+  pointer.
+- Fixed undefined behavior in `PciRootBridgeIo::configuration`, which
+  parsed a null resource descriptor list returned by the firmware.
+- Fixed undefined behavior in `Iommu::allocate_buffer`, whose returned
+  `DmaBuffer` exposed uninitialized memory as `[u8]`.
+- Fixed undefined behavior in `BaseCode::udp_read`, which let the
+  firmware write through a pointer derived from a shared reference, and
+  in `DiscoverInfo::new_in_buffer`, which left padding uninitialized.
+- Fixed an out-of-bounds read in `GraphicsOutput::query_mode` when the
+  firmware reports a mode info buffer smaller than `ModeInfo`, and
+  documented the alignment requirement of
+  `FrameBuffer::{read_value, write_value}`.
+- Fixed `UnicodeCollation::{str_lwr, str_upr, fat_to_str}`, which
+  returned a `CStr16` covering the whole output buffer and thus violated
+  the invariants of that type when the buffer was larger than the
+  string.
+- Fixed undefined behavior in the ATA, NVMe and SCSI pass-thru response
+  accessors, which trusted the transfer length reported by the firmware
+  and could return a slice pointing past the buffer.
+- Fixed undefined behavior in `HttpHelper::{request, response_first,
+  response_more}`, which left a token pointing into a dead stack frame
+  when polling failed, and passed the response data to the driver
+  through a read-only pointer.
+- **Breaking**: `PointerMode` and `PointerState` are now re-exports of
+  `SimplePointerMode` and `SimplePointerState` from `uefi-raw`, instead
+  of duplicates that declared the firmware's `BOOLEAN` fields as Rust
+  `bool`. Reading those as `bool` was undefined behavior for any value
+  other than 0 and 1. The fields are now named as in the specification;
+  convert a button with `bool::from`.
+- **Breaking**: `SimpleNetwork::{start, stop, initialize, reset, shutdown,
+  receive_filters, station_address, get_interrupt_status,
+  get_recycled_transmit_buffer_status}` now take `&mut self`. The firmware
+  updates the network mode during these calls, which conflicted with the
+  shared reference returned by `mode`.
+- **Breaking**: `Shell::set_current_dir` and `Shell::set_var` now take
+  `&mut self`. The shell frees the strings returned by `current_dir` and
+  `var` when the value changes, so holding one across the setter was a
+  use after free.
+- Fixed `Output::current_mode` and `Output::modes`, which passed a pointer
+  derived from a shared reference to the firmware as `*mut`.
+- `ScopedProtocol`, `TplGuard`, `HandleBuffer`, `ProtocolsPerHandle` and
+  the types backed by pool memory such as `PoolString` no longer panic
+  in release builds when dropped after boot services have exited. The
+  cleanup is skipped, as the resources are gone together with the boot
+  services. Debug builds still assert that boot services are active.
+- `boot::start_image` now frees the exit data buffer that the started
+  image may hand back. It was leaked before.
+- `FileHandle` no longer panics in `drop` when the firmware fails to
+  close the file. The error is logged instead.
+- The `Display` impls of `DevicePath` and `DevicePathNode` no longer
+  panic when the conversion to text fails, for example because the
+  device path to text protocol is not installed. They print the size
+  instead.
+- Fixed a memory leak in `HttpHelper::response_first`, which did not
+  free the response headers allocated by the driver.
+- `HttpHelper::response_first` no longer panics when a response header
+  is not valid UTF-8. Invalid bytes are replaced with U+FFFD.
+- **Breaking**: `Key` and `KeyData` now implement `TryFrom` instead of
+  `From` for the raw key types, and `Input::read_key` and
+  `InputEx::read_key` return `DEVICE_ERROR` when the firmware reports a
+  character that is not valid UCS-2. This previously panicked.
+- **Breaking**: `SimpleNetwork::transmit` now takes the packet as `&mut [u8]`.
+  The firmware writes the media header into the buffer when `header_size` is
+  nonzero, which was undefined behavior with the shared slice.
+- **Breaking**: `boot::create_event_ex` now takes the event group as
+  `Option<&Guid>` instead of `Option<NonNull<Guid>>`.
+- Relaxed `boot::wait_for_event` to take `&[Event]` instead of `&mut [Event]`
+  and `boot::exit` to take `*const Char16` instead of `*mut Char16`. The
+  firmware only reads these inputs.
+- Relaxed `runtime::set_virtual_address_map` to take `&[MemoryDescriptor]`
+  instead of `&mut [MemoryDescriptor]`. The firmware only reads the map.
+- Fixed a memory leak in `HiiConfigRouting::export`, which never freed the
+  result string allocated by the firmware.
+
+# uefi - v0.40.0 (2026-08-25)
+
+## Added
+- Added `proto::pi::mp::{CpuPhysicalLocation2, CPU_V2_EXTENDED_TOPOLOGY}` for
+  the extended processor topology.
+
+## Changed
+- Added `char16!` const-compatible macro as convenient replacement for `Char16::try_from().unwrap()`
+- `proto::debug::SystemContextARM` now contains the trailing `IFAR` field
+  mandated by the spec.
+- **Breaking:** The `GptPartitionAttributes::TYPE_SPECIFIC_BIT_*` constants
+  now cover bits 48 to 63 as mandated by the spec, instead of bits 47 to 62.
+- `boot::set_watchdog_timer` now passes the watchdog data size in bytes, as
+  mandated by the spec. Previously, firmware only saw half of the data.
+- `proto::usb::io::UsbIo::supported_languages` no longer returns a slice with
+  twice the actual number of language IDs, whose second half was an
+  out-of-bounds read.
+- `proto::network::pxe::DiscoverInfo::new_in_buffer` now accounts for the
+  alignment padding before the server list in its buffer size check.
+  Previously, an exactly-sized buffer was written 2 bytes out of bounds.
+- **Breaking:** `proto::pi::mp::ProcessorInformation` now contains the
+  `extended_information` field mandated by the PI specification. Previously,
+  the struct was 24 bytes too small, which firmware could write past.
+- **Breaking:** The revision-gated media fields `lowest_aligned_lba`,
+  `logical_blocks_per_physical_block`, and
+  `optimal_transfer_length_granularity` moved from `BlockIOMedia` to
+  `BlockIO` and return `None` if the protocol revision does not include
+  them. Previously, they read past the media structure on old revisions.
+- `DevicePath::to_pool`, `append_path`, and `append_node` now locate the
+  `DevicePathUtilities` protocol by its own GUID instead of the
+  `DevicePathToText` GUID.
+- `UnicodeCollation::str_to_fat` now zeroes the output buffer before the
+  conversion. Previously, the result could contain garbage from the
+  uninitialized buffer, or reference one byte past its end.
 
 ## Removed
 

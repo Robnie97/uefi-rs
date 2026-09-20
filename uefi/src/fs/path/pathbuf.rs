@@ -2,7 +2,7 @@
 
 use crate::fs::SEPARATOR;
 use crate::fs::path::Path;
-use crate::{CStr16, CString16, Char16};
+use crate::{CStr16, CString16, Char16, char16};
 use core::fmt::{Display, Formatter};
 
 /// A path buffer similar to the `PathBuf` of the standard library, but based on
@@ -19,10 +19,14 @@ impl PathBuf {
         Self::default()
     }
 
+    /// Truncates the path to zero length.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// Constructor that replaces all occurrences of `/` with `\`.
     fn new_from_cstring16(mut string: CString16) -> Self {
-        // SAFETY: The memory is valid.
-        const SEARCH: Char16 = unsafe { Char16::from_u16_unchecked('/' as u16) };
+        const SEARCH: Char16 = char16!('/');
         string.replace_char(SEARCH, SEPARATOR);
         Self(string)
     }
@@ -31,8 +35,7 @@ impl PathBuf {
     ///
     /// UNIX separators (`/`) will be replaced by [`SEPARATOR`] on the fly.
     pub fn push<P: AsRef<Path>>(&mut self, path: P) {
-        // SAFETY: The memory is valid.
-        const SEARCH: Char16 = unsafe { Char16::from_u16_unchecked('/' as u16) };
+        const SEARCH: Char16 = char16!('/');
 
         // do nothing on empty path
         if path.as_ref().is_empty() {
@@ -186,5 +189,18 @@ mod tests {
 
         assert_eq!(pathbuf2, pathbuf2);
         assert_ne!(pathbuf1, pathbuf2);
+    }
+
+    #[test]
+    fn clear() {
+        let mut pathbuf = PathBuf::new();
+        pathbuf.push(cstr16!("first"));
+        assert_eq!(cstr16!("first"), pathbuf.to_cstr16());
+
+        pathbuf.clear();
+        assert_eq!(cstr16!(""), pathbuf.to_cstr16());
+
+        pathbuf.clear();
+        assert_eq!(cstr16!(""), pathbuf.to_cstr16());
     }
 }

@@ -9,6 +9,7 @@ use crate::{
 };
 use bitflags::bitflags;
 use core::ffi::c_void;
+use core::mem::offset_of;
 use core::ops::RangeInclusive;
 
 newtype_enum! {
@@ -57,14 +58,14 @@ pub struct BootServices {
         ty: EventType,
         notify_tpl: Tpl,
         notify_func: Option<EventNotifyFn>,
-        notify_ctx: *mut c_void,
+        notify_ctx: *const c_void,
         out_event: *mut Event,
     ) -> Status,
     pub set_timer:
         unsafe extern "efiapi" fn(event: Event, ty: TimerDelay, trigger_time: u64) -> Status,
     pub wait_for_event: unsafe extern "efiapi" fn(
         number_of_events: usize,
-        events: *mut Event,
+        events: *const Event,
         out_index: *mut usize,
     ) -> Status,
     pub signal_event: unsafe extern "efiapi" fn(event: Event) -> Status,
@@ -98,7 +99,7 @@ pub struct BootServices {
     pub register_protocol_notify: unsafe extern "efiapi" fn(
         protocol: *const Guid,
         event: Event,
-        registration: *mut *const c_void,
+        registration: *mut *mut c_void,
     ) -> Status,
     pub locate_handle: unsafe extern "efiapi" fn(
         search_ty: i32,
@@ -133,7 +134,7 @@ pub struct BootServices {
         image_handle: Handle,
         exit_status: Status,
         exit_data_size: usize,
-        exit_data: *mut Char16,
+        exit_data: *const Char16,
     ) -> Status,
     pub unload_image: unsafe extern "efiapi" fn(image_handle: Handle) -> Status,
     pub exit_boot_services:
@@ -180,7 +181,7 @@ pub struct BootServices {
     pub open_protocol_information: unsafe extern "efiapi" fn(
         handle: Handle,
         protocol: *const Guid,
-        entry_buffer: *mut *const OpenProtocolInformationEntry,
+        entry_buffer: *mut *mut OpenProtocolInformationEntry,
         entry_count: *mut usize,
     ) -> Status,
 
@@ -199,7 +200,7 @@ pub struct BootServices {
     ) -> Status,
     pub locate_protocol: unsafe extern "efiapi" fn(
         proto: *const Guid,
-        registration: *mut c_void,
+        registration: *const c_void,
         out_proto: *mut *mut c_void,
     ) -> Status,
 
@@ -239,14 +240,14 @@ pub struct BootServices {
         ty: EventType,
         notify_tpl: Tpl,
         notify_fn: Option<EventNotifyFn>,
-        notify_ctx: *mut c_void,
-        event_group: *mut Guid,
+        notify_ctx: *const c_void,
+        event_group: *const Guid,
         out_event: *mut Event,
     ) -> Status,
 }
 
 bitflags! {
-    /// Flags describing the type of an UEFI event and its attributes.
+    /// Flags describing the type of a UEFI event and its attributes.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
     #[repr(transparent)]
     pub struct EventType: u32 {
@@ -288,7 +289,7 @@ pub enum InterfaceType: u32 => {
 }}
 
 /// Raw event notification function.
-pub type EventNotifyFn = unsafe extern "efiapi" fn(event: Event, context: *mut c_void);
+pub type EventNotifyFn = unsafe extern "efiapi" fn(event: Event, context: *const c_void);
 
 bitflags! {
     /// Flags describing the capabilities of a memory range.
@@ -325,6 +326,11 @@ bitflags! {
         /// This memory region is capable of being protected with the CPU's memory
         /// cryptography capabilities.
         const CPU_CRYPTO = 0x8_0000;
+        /// This memory region is capable of being hot-plugged (added or
+        /// removed at runtime). The OS should only use it for allocations
+        /// that can be relocated or freed, so that the region can be taken
+        /// offline.
+        const HOT_PLUGGABLE = 0x10_0000;
         /// This memory must be mapped by the OS when a runtime service is called.
         const RUNTIME = 0x8000_0000_0000_0000;
         /// This memory region is described with additional ISA-specific memory
@@ -360,10 +366,15 @@ bitflags! {
 /// [version]: MemoryDescriptor::VERSION
 /// [0]: https://github.com/tianocore/edk2/blob/7142e648416ff5d3eac6c6d607874805f5de0ca8/MdeModulePkg/Core/PiSmmCore/Page.c#L1059
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(C)]
+#[repr(C, align(8))]
 pub struct MemoryDescriptor {
     /// Type of memory occupying this range.
     pub ty: MemoryType,
+    /// Implicit padding that should be set to 0.
+    ///
+    /// This field is required for a correct layout on non-UEFI targets to
+    /// properly parse a memory map.
+    pub padding: u32,
     // Implicit 32-bit padding.
     /// Starting physical address.
     pub phys_start: PhysicalAddress,
@@ -375,6 +386,18 @@ pub struct MemoryDescriptor {
     pub att: MemoryAttribute,
 }
 
+// Ensure ABI guarantees for MemoryDescriptor.
+const _: () = {
+    assert!(size_of::<MemoryDescriptor>() == 40);
+    assert!(align_of::<MemoryDescriptor>() == 8);
+
+    assert!(offset_of!(MemoryDescriptor, ty) == 0);
+    assert!(offset_of!(MemoryDescriptor, phys_start) == 8);
+    assert!(offset_of!(MemoryDescriptor, virt_start) == 16);
+    assert!(offset_of!(MemoryDescriptor, page_count) == 24);
+    assert!(offset_of!(MemoryDescriptor, att) == 32);
+};
+
 impl MemoryDescriptor {
     /// Memory descriptor version number.
     pub const VERSION: u32 = 1;
@@ -384,6 +407,7 @@ impl Default for MemoryDescriptor {
     fn default() -> Self {
         Self {
             ty: MemoryType::RESERVED,
+            padding: 0,
             phys_start: 0,
             virt_start: 0,
             page_count: 0,
